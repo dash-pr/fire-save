@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { Dispatch, ReactNode, SetStateAction } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   Area,
   AreaChart,
@@ -15,7 +16,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Bot, CheckCircle2, CircleAlert, SlidersHorizontal, UploadCloud } from "lucide-react";
+import { Bot, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Plus, SlidersHorizontal, Trash2, UploadCloud } from "lucide-react";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Card, MetricCard } from "@/components/shared/card";
 import { ProgressBar, StatusPill } from "@/components/shared/progress";
@@ -27,8 +28,10 @@ import {
   currentMonth,
   debts,
   forecastInputs,
+  incomeEntries,
   investments,
   monthlyIncome,
+  nisaContributions,
   savingsGoals,
   transactions,
 } from "@/data/sample-data";
@@ -44,7 +47,7 @@ import {
   type MonteCarloResult,
 } from "@/domain/forecast";
 import { calculateHealthScore, calculateNetWorth } from "@/domain/finance";
-import type { Account, CreditDebt, ForecastInputs, Investment, SavingsGoal } from "@/domain/types";
+import type { Account, BudgetAssignment, Category, CreditDebt, ForecastInputs, IncomeEntry, Investment, SavingsGoal, Transaction } from "@/domain/types";
 import { formatJPY, formatMonth, formatPercent } from "@/lib/format";
 
 type PageKey = "home" | "budget" | "transactions" | "debt" | "goals" | "investments" | "forecast" | "reports" | "import" | "settings";
@@ -63,20 +66,48 @@ const pageTitles: Record<PageKey, { title: string; subtitle: string }> = {
 };
 
 const compactCurrency = (value: number) => `¥${Math.round(value / 1_000_000)}M`;
+const budgetKey = (month: string, categoryId: string) => `${month}:${categoryId}`;
+const monthStartDate = (month: string) => new Date(`${month}-01T00:00:00`);
+const makeLocalId = (prefix: string) => `${prefix}-${Math.random().toString(36).slice(2, 9)}`;
+const NISA_GROWTH_ANNUAL_LIMIT_YEN = 2_400_000;
+const NISA_COMBINED_ANNUAL_LIMIT_YEN = 3_600_000;
+
+function shiftMonth(month: string, offset: number): string {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const date = new Date(year, monthNumber - 1 + offset, 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function isLifestyleCategory(category: Category): boolean {
+  return category.groupId === "grp-everyday";
+}
+
+function isFixedPriorityCategory(category: Category): boolean {
+  return ["grp-fixed", "grp-debt", "grp-investments", "grp-goals"].includes(category.groupId);
+}
 
 export default function Home() {
   const [activePage, setActivePage] = useState<PageKey>("home");
+  const [selectedMonth, setSelectedMonth] = useState(currentMonth);
   const [accountState, setAccountState] = useState<Account[]>(accounts);
-  const [incomeYen, setIncomeYen] = useState(monthlyIncome.incomeYen);
+  const [incomeEntryState, setIncomeEntryState] = useState<IncomeEntry[]>(incomeEntries);
+  const [categoryState, setCategoryState] = useState<Category[]>(categories);
+  const [transactionState, setTransactionState] = useState<Transaction[]>(transactions);
   const [assignmentState, setAssignmentState] = useState<Record<string, number>>(
-    Object.fromEntries(budgetAssignments.map((assignment) => [assignment.categoryId, assignment.assignedYen])),
+    Object.fromEntries(budgetAssignments.map((assignment) => [budgetKey(assignment.month, assignment.categoryId), assignment.assignedYen])),
   );
+  const [estimatedAssignments, setEstimatedAssignments] = useState<Record<string, boolean>>({});
+  const [budgetNotice, setBudgetNotice] = useState<string | null>(null);
   const [debtState, setDebtState] = useState<CreditDebt[]>(debts);
   const [goalState, setGoalState] = useState<SavingsGoal[]>(savingsGoals);
   const [investmentState, setInvestmentState] = useState<Investment[]>(investments);
   const [assumptions, setAssumptions] = useState<ForecastInputs>(forecastInputs);
   const [simulation, setSimulation] = useState<MonteCarloResult | null>(null);
   const [budgetFilter, setBudgetFilter] = useState<"all" | "overspent" | "underfunded" | "funded">("all");
+
+  const activeCategories = categoryState.filter((category) => !category.isArchived);
+  const currentIncomeEntries = incomeEntryState.filter((entry) => entry.month === selectedMonth);
+  const incomeYen = currentIncomeEntries.reduce((total, entry) => total + entry.amountYen, 0);
 
   const currentAge = getCurrentAge(assumptions);
   const currentPortfolioYen = investmentState.reduce((total, investment) => total + investment.currentBalanceYen, 0);
@@ -88,23 +119,23 @@ export default function Home() {
     monthlyContributionYen: assumptions.monthlyInvestmentOverrideYen ?? monthlyContributionYen,
   };
   const assignments = useMemo(
-    () => categories.map((category) => ({ categoryId: category.id, month: currentMonth, assignedYen: assignmentState[category.id] ?? 0 })),
-    [assignmentState],
+    () => activeCategories.map((category) => ({ categoryId: category.id, month: selectedMonth, assignedYen: assignmentState[budgetKey(selectedMonth, category.id)] ?? 0 })),
+    [activeCategories, assignmentState, selectedMonth],
   );
   const budgetRows = useMemo(
-    () => buildBudgetRows({ categories, assignments, transactions, month: currentMonth }),
-    [assignments],
+    () => buildBudgetRows({ categories: activeCategories, assignments, transactions: transactionState, month: selectedMonth }),
+    [activeCategories, assignments, selectedMonth, transactionState],
   );
   const visibleBudgetRows = budgetRows.filter((row) => budgetFilter === "all" || row.status === budgetFilter);
   const readyToAssignYen = calculateReadyToAssignYen(incomeYen, assignments);
-  const totalExpensesYen = transactions.filter((transaction) => transaction.type === "debit").reduce((total, transaction) => total + transaction.amountYen, 0);
+  const totalExpensesYen = transactionState.filter((transaction) => transaction.type === "debit" && transaction.date.startsWith(selectedMonth)).reduce((total, transaction) => total + transaction.amountYen, 0);
   const savingsRate = calculateSavingsRate(incomeYen, totalExpensesYen);
   const netWorth = calculateNetWorth({ accounts: accountState, investments: investmentState, debts: debtState });
   const debtSummary = calculateDebtSummary(debtState);
   const deterministic = calculateDeterministicForecast(effectiveForecastInputs);
   const withdrawal = simulateWithdrawalSurvival(effectiveForecastInputs, deterministic.targetPortfolioYen, 500);
   const drawdown = simulation ? analyzeDrawdowns(simulation.maxDrawdowns) : null;
-  const uncategorizedCount = transactions.filter((transaction) => !transaction.categoryId).length;
+  const uncategorizedCount = transactionState.filter((transaction) => !transaction.categoryId && transaction.date.startsWith(selectedMonth)).length;
   const overspentCount = budgetRows.filter((row) => row.status === "overspent").length;
   const health = calculateHealthScore({
     savingsRate,
@@ -120,6 +151,55 @@ export default function Home() {
     setSimulation(null);
   };
 
+  const openBudgetMonth = (month: string) => {
+    setSelectedMonth(month);
+    const hasExistingBudget = Object.keys(assignmentState).some((key) => key.startsWith(`${month}:`));
+    if (hasExistingBudget) {
+      setBudgetNotice(null);
+      return;
+    }
+
+    const previousMonth = shiftMonth(month, -1);
+    const previousIncomeEntries = incomeEntryState.filter((entry) => entry.month === previousMonth);
+    const previousIncome = previousIncomeEntries.reduce((total, entry) => total + entry.amountYen, 0);
+    const nextAssignments: Record<string, number> = {};
+    let fixedAssigned = 0;
+    let lifestyleAssigned = 0;
+
+    activeCategories.forEach((category) => {
+      const previousAmount = assignmentState[budgetKey(previousMonth, category.id)] ?? 0;
+      if (isFixedPriorityCategory(category)) fixedAssigned += previousAmount;
+      else if (isLifestyleCategory(category)) lifestyleAssigned += previousAmount;
+      nextAssignments[budgetKey(month, category.id)] = previousAmount;
+    });
+
+    let notice = "New month created from the previous month. Review estimates before relying on them.";
+    if (previousIncomeEntries.length > 0 && incomeEntryState.every((entry) => entry.month !== month)) {
+      setIncomeEntryState((previous) => [
+        ...previous,
+        ...previousIncomeEntries.map((entry) => ({ ...entry, id: makeLocalId("income"), month })),
+      ]);
+      notice = "Income auto-filled from last month. Update if it changed.";
+    }
+
+    if (previousIncome > 0 && fixedAssigned + lifestyleAssigned > previousIncome && lifestyleAssigned > 0) {
+      const availableForLifestyle = Math.max(0, previousIncome - fixedAssigned);
+      const trimRatio = availableForLifestyle / lifestyleAssigned;
+      activeCategories.filter(isLifestyleCategory).forEach((category) => {
+        const key = budgetKey(month, category.id);
+        nextAssignments[key] = Math.floor((nextAssignments[key] ?? 0) * trimRatio);
+      });
+      notice = "Budget adjusted to fit income. Review lifestyle categories.";
+    }
+
+    setAssignmentState((previous) => ({ ...previous, ...nextAssignments }));
+    setEstimatedAssignments((previous) => ({
+      ...previous,
+      ...Object.fromEntries(activeCategories.filter(isLifestyleCategory).map((category) => [budgetKey(month, category.id), true])),
+    }));
+    setBudgetNotice(previousIncomeEntries.length > 0 ? notice : "First month created with category structure only. Add income and assignments to begin.");
+  };
+
   const page = pageTitles[activePage];
 
   return (
@@ -129,7 +209,7 @@ export default function Home() {
         <main className="min-w-0 flex-1 px-6 py-6 lg:px-8">
           <header className="mb-6 flex items-start justify-between gap-4">
             <div>
-              <p className="text-sm font-medium uppercase tracking-[0.18em] text-slate-500">{formatMonth(currentMonth)}</p>
+              <p className="text-sm font-medium uppercase tracking-[0.18em] text-slate-500">{formatMonth(selectedMonth)}</p>
               <h1 className="mt-2 text-4xl font-semibold tracking-tight">{page.title}</h1>
               <p className="mt-2 max-w-3xl text-slate-600">{page.subtitle}</p>
             </div>
@@ -140,7 +220,7 @@ export default function Home() {
 
           {activePage === "home" && <HomePage readyToAssignYen={readyToAssignYen} netWorthYen={netWorth.netWorthYen} savingsRate={savingsRate} fatfireAge={deterministic.estimatedFatfireAge} healthScore={health.score} uncategorizedCount={uncategorizedCount} overspentCount={overspentCount} contributionDeltaYen={deterministic.contributionDeltaYen} accounts={accountState} onNavigate={setActivePage} />}
 
-          {activePage === "budget" && <BudgetPage incomeYen={incomeYen} setIncomeYen={setIncomeYen} readyToAssignYen={readyToAssignYen} budgetRows={visibleBudgetRows} fullBudgetRows={budgetRows} budgetFilter={budgetFilter} setBudgetFilter={setBudgetFilter} setAssignment={(categoryId, value) => setAssignmentState((previous) => ({ ...previous, [categoryId]: value }))} />}
+          {activePage === "budget" && <BudgetPage month={selectedMonth} setMonth={openBudgetMonth} incomeEntries={currentIncomeEntries} setIncomeEntries={setIncomeEntryState} readyToAssignYen={readyToAssignYen} budgetRows={visibleBudgetRows} fullBudgetRows={budgetRows} budgetFilter={budgetFilter} setBudgetFilter={setBudgetFilter} categoryList={activeCategories} setCategories={setCategoryState} transactions={transactionState} setTransactions={setTransactionState} budgetNotice={budgetNotice} estimatedAssignments={estimatedAssignments} setAssignment={(categoryId, value) => setAssignmentState((previous) => ({ ...previous, [budgetKey(selectedMonth, categoryId)]: value }))} assignments={assignments} />}
 
           {activePage === "transactions" && <TransactionsPage uncategorizedCount={uncategorizedCount} />}
           {activePage === "debt" && <DebtPage debts={debtState} setDebts={setDebtState} totalMonthlyObligationYen={debtSummary.totalMonthlyObligationYen} totalOutstandingYen={debtSummary.totalOutstandingYen} />}
@@ -149,7 +229,7 @@ export default function Home() {
           {activePage === "forecast" && <ForecastPage inputs={effectiveForecastInputs} assumptions={assumptions} setAssumption={setAssumption} deterministic={deterministic} simulation={simulation} setSimulation={setSimulation} drawdown={drawdown} withdrawal={withdrawal} />}
           {activePage === "reports" && <ReportsPage budgetRows={budgetRows} netWorthYen={netWorth.netWorthYen} incomeYen={incomeYen} totalExpensesYen={totalExpensesYen} />}
           {activePage === "import" && <ImportPage />}
-          {activePage === "settings" && <SettingsPage assumptions={assumptions} setAssumption={setAssumption} incomeYen={incomeYen} setIncomeYen={setIncomeYen} accounts={accountState} setAccounts={setAccountState} investments={investmentState} setInvestments={setInvestmentState} debts={debtState} setDebts={setDebtState} goals={goalState} setGoals={setGoalState} />}
+          {activePage === "settings" && <SettingsPage assumptions={assumptions} setAssumption={setAssumption} accounts={accountState} setAccounts={setAccountState} investments={investmentState} setInvestments={setInvestmentState} debts={debtState} setDebts={setDebtState} goals={goalState} setGoals={setGoalState} />}
         </main>
       </div>
     </div>
@@ -197,24 +277,103 @@ function HomePage({ readyToAssignYen, netWorthYen, savingsRate, fatfireAge, heal
   );
 }
 
-function BudgetPage({ incomeYen, setIncomeYen, readyToAssignYen, budgetRows, fullBudgetRows, budgetFilter, setBudgetFilter, setAssignment }: { incomeYen: number; setIncomeYen: (value: number) => void; readyToAssignYen: number; budgetRows: ReturnType<typeof buildBudgetRows>; fullBudgetRows: ReturnType<typeof buildBudgetRows>; budgetFilter: "all" | "overspent" | "underfunded" | "funded"; setBudgetFilter: (filter: "all" | "overspent" | "underfunded" | "funded") => void; setAssignment: (categoryId: string, value: number) => void }) {
+function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToAssignYen, budgetRows, fullBudgetRows, budgetFilter, setBudgetFilter, categoryList, setCategories, transactions, setTransactions, budgetNotice, estimatedAssignments, setAssignment, assignments }: { month: string; setMonth: (month: string) => void; incomeEntries: IncomeEntry[]; setIncomeEntries: Dispatch<SetStateAction<IncomeEntry[]>>; readyToAssignYen: number; budgetRows: ReturnType<typeof buildBudgetRows>; fullBudgetRows: ReturnType<typeof buildBudgetRows>; budgetFilter: "all" | "overspent" | "underfunded" | "funded"; setBudgetFilter: (filter: "all" | "overspent" | "underfunded" | "funded") => void; categoryList: Category[]; setCategories: Dispatch<SetStateAction<Category[]>>; transactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>>; budgetNotice: string | null; estimatedAssignments: Record<string, boolean>; setAssignment: (categoryId: string, value: number) => void; assignments: BudgetAssignment[] }) {
   const filters = ["all", "overspent", "underfunded", "funded"] as const;
+  const [incomeCollapsed, setIncomeCollapsed] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [activityCategoryId, setActivityCategoryId] = useState<string | null>(null);
+  const [expenseDraft, setExpenseDraft] = useState({ payee: "", amountYen: 0 });
+  const [expenseError, setExpenseError] = useState<string | null>(null);
+  const [nisaWarning, setNisaWarning] = useState<string | null>(null);
+  const totalIncomeYen = incomeEntries.reduce((total, entry) => total + entry.amountYen, 0);
+  const totalActivityYen = fullBudgetRows.reduce((total, row) => total + row.activityYen, 0);
+  const overspentByYen = Math.max(0, totalActivityYen - totalIncomeYen);
+
+  useEffect(() => {
+    try {
+      setCollapsedGroups(JSON.parse(localStorage.getItem("fire-save-budget-collapsed-groups") ?? "{}") as Record<string, boolean>);
+    } catch {
+      setCollapsedGroups({});
+    }
+  }, []);
+
+  const persistCollapsedGroups = (next: Record<string, boolean>) => {
+    setCollapsedGroups(next);
+    localStorage.setItem("fire-save-budget-collapsed-groups", JSON.stringify(next));
+  };
+
+  const addIncomeRow = () => setIncomeEntries((previous) => [...previous, { id: makeLocalId("income"), month, sourceName: "Income", amountYen: 0 }]);
+  const updateIncomeRow = (id: string, changes: Partial<IncomeEntry>) => setIncomeEntries((previous) => previous.map((entry) => entry.id === id ? { ...entry, ...changes } : entry));
+  const deleteIncomeRow = (id: string) => setIncomeEntries((previous) => previous.filter((entry) => entry.id !== id));
+
+  const addCategory = (groupId: string) => {
+    const name = window.prompt("Category name");
+    if (!name?.trim()) return;
+    setCategories((previous) => [...previous, { id: makeLocalId("cat"), groupId, name: name.trim(), source: "custom" }]);
+  };
+
+  const deleteCategory = (category: Category) => {
+    const count = transactions.filter((transaction) => transaction.categoryId === category.id && transaction.date.startsWith(month)).length;
+    if (count > 0 && !window.confirm(`This category has ${count} transactions this month. Move them to Uncategorized?`)) return;
+    setTransactions((previous) => previous.map((transaction) => transaction.categoryId === category.id && transaction.date.startsWith(month) ? { ...transaction, categoryId: undefined } : transaction));
+    setCategories((previous) => category.source === "custom" ? previous.filter((item) => item.id !== category.id) : previous.map((item) => item.id === category.id ? { ...item, isArchived: true } : item));
+  };
+
+  const assignWithNisaCheck = (categoryId: string, value: number) => {
+    if (categoryId !== "cat-nisa") {
+      setAssignment(categoryId, value);
+      return;
+    }
+    const year = Number(month.slice(0, 4));
+    const growthUsed = nisaContributions.find((item) => item.year === year && item.accountType === "growth")?.totalContributed ?? 0;
+    const tsumitateUsed = nisaContributions.find((item) => item.year === year && item.accountType === "tsumitate")?.totalContributed ?? 0;
+    const remaining = Math.max(0, Math.min(NISA_GROWTH_ANNUAL_LIMIT_YEN - growthUsed, NISA_COMBINED_ANNUAL_LIMIT_YEN - growthUsed - tsumitateUsed));
+    if (value > remaining) {
+      const overflow = value - remaining;
+      setAssignment("cat-nisa", remaining);
+      setAssignment("cat-taxable", (assignments.find((assignment) => assignment.categoryId === "cat-taxable")?.assignedYen ?? 0) + overflow);
+      setNisaWarning(`${formatJPY(overflow)} moved to Taxable account — NISA limit reached for this year.`);
+      return;
+    }
+    setAssignment(categoryId, value);
+    setNisaWarning(remaining - value <= 200_000 ? `NISA annual limit almost reached — ${formatJPY(Math.max(0, remaining - value))} remaining.` : null);
+  };
+
+  const logExpense = (categoryId: string) => {
+    if (expenseDraft.amountYen <= 0 || !expenseDraft.payee.trim()) {
+      setExpenseError("Enter a payee and amount before logging the expense.");
+      return;
+    }
+    setTransactions((previous) => [...previous, { id: makeLocalId("txn"), accountId: "acct-checking", categoryId, date: `${month}-15`, payee: expenseDraft.payee.trim(), amountYen: expenseDraft.amountYen, type: "debit", source: "manual" }]);
+    setExpenseDraft({ payee: "", amountYen: 0 });
+    setExpenseError(null);
+  };
+
   return (
     <div className="space-y-6">
+      <MonthNavigator month={month} onPrevious={() => setMonth(shiftMonth(month, -1))} onNext={() => setMonth(shiftMonth(month, 1))} />
+      {budgetNotice && <div className="rounded-3xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm font-semibold text-amber-900">{budgetNotice}</div>}
+      {overspentByYen > 0 && <div className="rounded-3xl border border-red-200 bg-red-50 px-5 py-4 text-sm font-semibold text-red-800">You spent {formatJPY(overspentByYen)} more than you earned this month.</div>}
+      {nisaWarning && <div className="rounded-3xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm font-semibold text-amber-900">{nisaWarning}</div>}
+
       <section className="grid gap-4 xl:grid-cols-3">
-        <MetricCard label="Monthly Income" value={formatJPY(incomeYen)} detail="Editable income for allocation" tone="blue" />
+        <MetricCard label="Total Income This Month" value={formatJPY(totalIncomeYen)} detail="Entered in monthly income rows" tone="blue" />
         <MetricCard label="Ready to Assign" value={formatJPY(readyToAssignYen)} detail="Income minus assigned amounts" tone={readyToAssignYen >= 0 ? "green" : "amber"} />
         <MetricCard label="Overspent" value={`${fullBudgetRows.filter((row) => row.status === "overspent").length}`} detail="Categories below zero available" tone="amber" />
       </section>
 
-      <Card title="Monthly assignments" eyebrow="Budget workspace" action={<CurrencyInput label="Income" value={incomeYen} onChange={setIncomeYen} />}>
+      <Card title="Income" eyebrow="Monthly sources" action={<button type="button" onClick={() => setIncomeCollapsed(!incomeCollapsed)} className="rounded-full bg-slate-100 p-2 text-slate-600"><ChevronDown className={`h-4 w-4 transition ${incomeCollapsed ? "-rotate-90" : ""}`} /></button>}>
+        <AnimatePresence initial={false}>{!incomeCollapsed && <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2, ease: "easeOut" }} className="overflow-hidden"><div className="space-y-3">{incomeEntries.length === 0 && <p className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-500">No income entered for this month yet.</p>}{incomeEntries.map((entry) => <div key={entry.id} className="grid gap-3 rounded-2xl bg-slate-50 p-3 md:grid-cols-[1fr_180px_auto]"><TextInput label="Source" value={entry.sourceName} onChange={(value) => updateIncomeRow(entry.id, { sourceName: value })} /><CurrencyInput label="Amount" value={entry.amountYen} onChange={(value) => updateIncomeRow(entry.id, { amountYen: value })} /><button type="button" onClick={() => deleteIncomeRow(entry.id)} className="self-end rounded-xl p-2 text-slate-400 transition hover:bg-red-50 hover:text-red-600"><Trash2 className="h-4 w-4" /></button></div>)}<button type="button" onClick={addIncomeRow} className="inline-flex items-center gap-2 rounded-2xl bg-[#1C1F3A] px-4 py-3 text-sm font-semibold text-white"><Plus className="h-4 w-4" /> Add Income Row</button><p className="text-lg font-semibold">Total Income This Month: {formatJPY(totalIncomeYen)}</p></div></motion.div>}</AnimatePresence>
+      </Card>
+
+      <Card title="Monthly assignments" eyebrow="Budget workspace">
         <div className="mb-4 flex flex-wrap gap-2">
           {filters.map((filter) => <button key={filter} type="button" onClick={() => setBudgetFilter(filter)} className={`rounded-full px-4 py-2 text-sm font-semibold capitalize transition ${budgetFilter === filter ? "bg-[#1C1F3A] text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>{filter} {filter !== "all" ? fullBudgetRows.filter((row) => row.status === filter).length : fullBudgetRows.length}</button>)}
         </div>
         <div className="overflow-hidden rounded-2xl border border-slate-100">
           <table className="w-full border-collapse text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Category</th><th className="px-4 py-3 text-right">Assigned</th><th className="px-4 py-3 text-right">Activity</th><th className="px-4 py-3 text-right">Available</th></tr></thead>
-            <tbody>{categoryGroups.map((group) => { const rows = budgetRows.filter((row) => row.category.groupId === group.id); if (rows.length === 0) return null; return <BudgetGroup key={group.id} name={group.name} rows={rows} setAssignment={setAssignment} />; })}</tbody>
+            <tbody>{categoryGroups.map((group) => { const rows = budgetRows.filter((row) => row.category.groupId === group.id); if (rows.length === 0 && categoryList.every((category) => category.groupId !== group.id)) return null; return <BudgetGroup key={group.id} groupId={group.id} name={group.name} rows={rows} isCollapsed={collapsedGroups[group.id] ?? false} toggleCollapsed={() => persistCollapsedGroups({ ...collapsedGroups, [group.id]: !(collapsedGroups[group.id] ?? false) })} addCategory={() => addCategory(group.id)} deleteCategory={deleteCategory} setAssignment={assignWithNisaCheck} month={month} transactions={transactions} openActivityCategoryId={activityCategoryId} setOpenActivityCategoryId={setActivityCategoryId} expenseDraft={expenseDraft} setExpenseDraft={setExpenseDraft} logExpense={logExpense} expenseError={expenseError} estimatedAssignments={estimatedAssignments} />; })}</tbody>
           </table>
         </div>
       </Card>
@@ -254,12 +413,19 @@ function ImportPage() {
   return <section className="grid gap-6 xl:grid-cols-3"><WorkflowCard icon={<UploadCloud className="h-5 w-5" />} title="Upload statement or CSV" detail="Supports JPG, PNG, PDF, and CSV files within Supabase free-tier storage limits." /><WorkflowCard icon={<CheckCircle2 className="h-5 w-5" />} title="Review extracted transactions" detail="Japanese dates and integer JPY amounts are normalized before confirmation." /><WorkflowCard icon={<Bot className="h-5 w-5" />} title="Generate monthly insight" detail="Insights use aggregated monthly summaries only and are cached by month." /></section>;
 }
 
-function SettingsPage({ assumptions, setAssumption, incomeYen, setIncomeYen, accounts, setAccounts, investments, setInvestments, debts, setDebts, goals, setGoals }: { assumptions: ForecastInputs; setAssumption: (field: keyof ForecastInputs, value: string | number | undefined) => void; incomeYen: number; setIncomeYen: (value: number) => void; accounts: Account[]; setAccounts: (accounts: Account[]) => void; investments: Investment[]; setInvestments: (investments: Investment[]) => void; debts: CreditDebt[]; setDebts: (debts: CreditDebt[]) => void; goals: SavingsGoal[]; setGoals: (goals: SavingsGoal[]) => void }) {
-  return <div className="space-y-6"><Card title="Core planning defaults" eyebrow="Shared assumptions"><div className="grid gap-3 xl:grid-cols-4"><TextInput label="Date of birth" value={assumptions.dateOfBirth ?? "1996-02-01"} type="date" onChange={(value) => setAssumption("dateOfBirth", value)} /><NumberInput label="Calculated age" value={Math.floor(calculateAgeFromDob(assumptions.dateOfBirth ?? "1996-02-01"))} onChange={() => undefined} disabled /><CurrencyInput label="Monthly income" value={incomeYen} onChange={setIncomeYen} /><NumberInput label="Target FATFire age" value={assumptions.targetRetirementAge} onChange={(value) => setAssumption("targetRetirementAge", value)} /><CurrencyInput label="Annual retirement spend" value={assumptions.targetAnnualRetirementSpendYen} onChange={(value) => setAssumption("targetAnnualRetirementSpendYen", value)} /><PercentInput label="Safe withdrawal rate" value={assumptions.safeWithdrawalRate} onChange={(value) => setAssumption("safeWithdrawalRate", value)} /><PercentInput label="Expected return" value={assumptions.expectedAnnualReturn} onChange={(value) => setAssumption("expectedAnnualReturn", value)} /><PercentInput label="Inflation" value={assumptions.inflationRate} onChange={(value) => setAssumption("inflationRate", value)} /><PercentInput label="Volatility" value={assumptions.returnVolatility} onChange={(value) => setAssumption("returnVolatility", value)} /><NumberInput label="Retirement end age" value={assumptions.retirementEndAge} onChange={(value) => setAssumption("retirementEndAge", value)} /><CurrencyInput label="Reserve threshold" value={assumptions.reserveThresholdYen} onChange={(value) => setAssumption("reserveThresholdYen", value)} /></div></Card><Card title="Editable source values" eyebrow="Manual data entry"><div className="grid gap-6 xl:grid-cols-2"><EditableList title="Accounts">{accounts.map((account) => <CurrencyInput key={account.id} label={account.name} value={account.balanceYen} onChange={(value) => setAccounts(accounts.map((item) => item.id === account.id ? { ...item, balanceYen: value } : item))} />)}</EditableList><EditableList title="Investments">{investments.map((investment) => <CurrencyInput key={investment.id} label={investment.accountName} value={investment.currentBalanceYen} onChange={(value) => setInvestments(investments.map((item) => item.id === investment.id ? { ...item, currentBalanceYen: value } : item))} />)}</EditableList><EditableList title="Debt balances">{debts.map((debt) => <CurrencyInput key={debt.id} label={debt.cardName} value={debt.currentBalanceYen} onChange={(value) => setDebts(debts.map((item) => item.id === debt.id ? { ...item, currentBalanceYen: value } : item))} />)}</EditableList><EditableList title="Goal balances">{goals.map((goal) => <CurrencyInput key={goal.id} label={goal.name} value={goal.currentSavedYen} onChange={(value) => setGoals(goals.map((item) => item.id === goal.id ? { ...item, currentSavedYen: value } : item))} />)}</EditableList></div></Card></div>;
+function SettingsPage({ assumptions, setAssumption, accounts, setAccounts, investments, setInvestments, debts, setDebts, goals, setGoals }: { assumptions: ForecastInputs; setAssumption: (field: keyof ForecastInputs, value: string | number | undefined) => void; accounts: Account[]; setAccounts: (accounts: Account[]) => void; investments: Investment[]; setInvestments: (investments: Investment[]) => void; debts: CreditDebt[]; setDebts: (debts: CreditDebt[]) => void; goals: SavingsGoal[]; setGoals: (goals: SavingsGoal[]) => void }) {
+  return <div className="space-y-6"><Card title="Core planning defaults" eyebrow="Shared assumptions"><div className="grid gap-3 xl:grid-cols-4"><TextInput label="Date of birth" value={assumptions.dateOfBirth ?? "1996-02-01"} type="date" onChange={(value) => setAssumption("dateOfBirth", value)} /><NumberInput label="Calculated age" value={Math.floor(calculateAgeFromDob(assumptions.dateOfBirth ?? "1996-02-01"))} onChange={() => undefined} disabled /><NumberInput label="Target FATFire age" value={assumptions.targetRetirementAge} onChange={(value) => setAssumption("targetRetirementAge", value)} /><CurrencyInput label="Annual retirement spend" value={assumptions.targetAnnualRetirementSpendYen} onChange={(value) => setAssumption("targetAnnualRetirementSpendYen", value)} /><PercentInput label="Safe withdrawal rate" value={assumptions.safeWithdrawalRate} onChange={(value) => setAssumption("safeWithdrawalRate", value)} /><PercentInput label="Expected return" value={assumptions.expectedAnnualReturn} onChange={(value) => setAssumption("expectedAnnualReturn", value)} /><PercentInput label="Inflation" value={assumptions.inflationRate} onChange={(value) => setAssumption("inflationRate", value)} /><PercentInput label="Volatility" value={assumptions.returnVolatility} onChange={(value) => setAssumption("returnVolatility", value)} /><NumberInput label="Retirement end age" value={assumptions.retirementEndAge} onChange={(value) => setAssumption("retirementEndAge", value)} /><CurrencyInput label="Reserve threshold" value={assumptions.reserveThresholdYen} onChange={(value) => setAssumption("reserveThresholdYen", value)} /></div></Card><Card title="Editable source values" eyebrow="Manual data entry"><div className="grid gap-6 xl:grid-cols-2"><EditableList title="Accounts">{accounts.map((account) => <CurrencyInput key={account.id} label={account.name} value={account.balanceYen} onChange={(value) => setAccounts(accounts.map((item) => item.id === account.id ? { ...item, balanceYen: value } : item))} />)}</EditableList><EditableList title="Investments">{investments.map((investment) => <CurrencyInput key={investment.id} label={investment.accountName} value={investment.currentBalanceYen} onChange={(value) => setInvestments(investments.map((item) => item.id === investment.id ? { ...item, currentBalanceYen: value } : item))} />)}</EditableList><EditableList title="Debt balances">{debts.map((debt) => <CurrencyInput key={debt.id} label={debt.cardName} value={debt.currentBalanceYen} onChange={(value) => setDebts(debts.map((item) => item.id === debt.id ? { ...item, currentBalanceYen: value } : item))} />)}</EditableList><EditableList title="Goal balances">{goals.map((goal) => <CurrencyInput key={goal.id} label={goal.name} value={goal.currentSavedYen} onChange={(value) => setGoals(goals.map((item) => item.id === goal.id ? { ...item, currentSavedYen: value } : item))} />)}</EditableList></div></Card></div>;
 }
 
-function BudgetGroup({ name, rows, setAssignment }: { name: string; rows: ReturnType<typeof buildBudgetRows>; setAssignment: (categoryId: string, value: number) => void }) {
-  return <><tr className="border-t border-slate-100 bg-slate-50/70"><td colSpan={4} className="px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">{name}</td></tr>{rows.map((row) => { const tone = row.status === "overspent" ? "red" : row.status === "underfunded" ? "amber" : "green"; return <tr key={row.category.id} className="border-t border-slate-100"><td className="px-4 py-3 font-medium">{row.category.name}</td><td className="px-4 py-3 text-right"><input value={row.assignedYen} onChange={(event) => setAssignment(row.category.id, Number(event.target.value) || 0)} type="number" className="w-32 rounded-xl border border-slate-200 bg-white px-3 py-2 text-right tabular-nums outline-none focus:border-[#4A7CFF]" /></td><td className="px-4 py-3 text-right tabular-nums">{formatJPY(row.activityYen)}</td><td className="px-4 py-3 text-right"><StatusPill tone={tone}>{formatJPY(row.availableYen)}</StatusPill></td></tr>; })}</>;
+function MonthNavigator({ month, onPrevious, onNext }: { month: string; onPrevious: () => void; onNext: () => void }) {
+  return <div className="flex items-center justify-between rounded-3xl bg-white p-3 shadow-sm ring-1 ring-slate-100"><button type="button" onClick={onPrevious} className="rounded-2xl bg-slate-100 p-3 text-slate-600 transition hover:bg-slate-200"><ChevronLeft className="h-5 w-5" /></button><div className="text-center"><p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Budget Month</p><p className="text-xl font-semibold">{formatMonth(month)}</p></div><button type="button" onClick={onNext} className="rounded-2xl bg-slate-100 p-3 text-slate-600 transition hover:bg-slate-200"><ChevronRight className="h-5 w-5" /></button></div>;
+}
+
+function BudgetGroup({ name, rows, isCollapsed, toggleCollapsed, addCategory, deleteCategory, setAssignment, month, transactions, openActivityCategoryId, setOpenActivityCategoryId, expenseDraft, setExpenseDraft, logExpense, expenseError, estimatedAssignments }: { groupId: string; name: string; rows: ReturnType<typeof buildBudgetRows>; isCollapsed: boolean; toggleCollapsed: () => void; addCategory: () => void; deleteCategory: (category: Category) => void; setAssignment: (categoryId: string, value: number) => void; month: string; transactions: Transaction[]; openActivityCategoryId: string | null; setOpenActivityCategoryId: (categoryId: string | null) => void; expenseDraft: { payee: string; amountYen: number }; setExpenseDraft: (draft: { payee: string; amountYen: number }) => void; logExpense: (categoryId: string) => void; expenseError: string | null; estimatedAssignments: Record<string, boolean> }) {
+  const groupAssigned = rows.reduce((total, row) => total + row.assignedYen, 0);
+  const groupActivity = rows.reduce((total, row) => total + row.activityYen, 0);
+  const groupAvailable = rows.reduce((total, row) => total + row.availableYen, 0);
+  return <><tr onClick={toggleCollapsed} className="cursor-pointer border-t border-slate-100 bg-slate-50/70"><td className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500"><span className="inline-flex items-center gap-2"><ChevronDown className={`h-4 w-4 transition ${isCollapsed ? "-rotate-90" : ""}`} />{name}</span></td><td className="px-4 py-3 text-right text-xs font-semibold text-slate-500">{formatJPY(groupAssigned)}</td><td className="px-4 py-3 text-right text-xs font-semibold text-slate-500">{formatJPY(groupActivity)}</td><td className="px-4 py-3 text-right"><div className="inline-flex items-center gap-3"><span className="text-xs font-semibold text-slate-500">{formatJPY(groupAvailable)}</span><button type="button" onClick={(event) => { event.stopPropagation(); addCategory(); }} className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"><Plus className="mr-1 inline h-3 w-3" /> Add Category</button></div></td></tr><AnimatePresence initial={false}>{!isCollapsed && rows.map((row) => { const tone = row.status === "overspent" ? "red" : row.status === "underfunded" ? "amber" : "green"; const rowTransactions = transactions.filter((transaction) => transaction.categoryId === row.category.id && transaction.date.startsWith(month)); const isActivityOpen = openActivityCategoryId === row.category.id; return <motion.tr key={row.category.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2, ease: "easeOut" }} className="group border-t border-slate-100"><td className="px-4 py-3 font-medium"><div className="flex items-center gap-2"><button type="button" onClick={() => deleteCategory(row.category)} className="opacity-0 transition group-hover:opacity-100 rounded-lg p-1 text-slate-300 hover:bg-red-50 hover:text-red-600"><Trash2 className="h-4 w-4" /></button><span>{row.category.name}</span>{estimatedAssignments[budgetKey(month, row.category.id)] && <span className="text-xs font-semibold text-amber-600">estimated — based on last month</span>}</div></td><td className="px-4 py-3 text-right"><input value={row.assignedYen} onChange={(event) => setAssignment(row.category.id, Number(event.target.value) || 0)} type="number" className="w-32 rounded-xl border border-slate-200 bg-white px-3 py-2 text-right tabular-nums outline-none focus:border-[#4A7CFF]" /></td><td className="relative px-4 py-3 text-right tabular-nums"><button type="button" onClick={() => setOpenActivityCategoryId(isActivityOpen ? null : row.category.id)} className="rounded-xl px-3 py-2 font-semibold transition hover:bg-slate-100">{formatJPY(row.activityYen)}</button>{isActivityOpen && <div className="absolute right-4 top-12 z-20 w-80 rounded-3xl border border-slate-200 bg-white p-4 text-left shadow-xl"><p className="font-semibold">{row.category.name} activity</p><div className="mt-3 max-h-40 space-y-2 overflow-auto">{rowTransactions.length === 0 ? <p className="text-sm text-slate-500">No transactions in this category this month.</p> : rowTransactions.map((transaction) => <div key={transaction.id} className="flex justify-between gap-3 rounded-2xl bg-slate-50 p-2 text-sm"><span className="truncate">{transaction.payee}</span><span className="font-semibold tabular-nums">{formatJPY(transaction.amountYen)}</span></div>)}</div><div className="mt-3 grid gap-2"><TextInput label="Payee" value={expenseDraft.payee} onChange={(value) => setExpenseDraft({ ...expenseDraft, payee: value })} /><CurrencyInput label="Amount" value={expenseDraft.amountYen} onChange={(value) => setExpenseDraft({ ...expenseDraft, amountYen: value })} /><button type="button" onClick={() => logExpense(row.category.id)} className="rounded-2xl bg-[#1C1F3A] px-4 py-2 text-sm font-semibold text-white">+ Log Expense</button>{expenseError && <p className="text-xs font-semibold text-red-600">{expenseError}</p>}</div></div>}</td><td className="px-4 py-3 text-right"><StatusPill tone={tone}>{formatJPY(row.availableYen)}</StatusPill></td></motion.tr>; })}</AnimatePresence></>;
 }
 
 function CurrencyInput({ label, value, onChange, disabled = false }: { label: string; value: number; onChange: (value: number) => void; disabled?: boolean }) {

@@ -35,6 +35,7 @@ export const categories: Category[] = [
   { id: "cat-gaming-pc", groupId: "grp-goals", name: "Gaming PC", source: "system" },
   { id: "cat-europe", groupId: "grp-goals", name: "Europe Trip", source: "system" },
   { id: "cat-nisa", groupId: "grp-investments", name: "NISA Contribution", source: "default" },
+  { id: "cat-taxable", groupId: "grp-investments", name: "Taxable Investment", source: "default" },
   { id: "cat-ideco", groupId: "grp-investments", name: "iDeCo Contribution", source: "default" },
 ];
 
@@ -63,6 +64,7 @@ export const budgetAssignments: BudgetAssignment[] = [
   { categoryId: "cat-gaming-pc", month: currentMonth, assignedYen: 35000 },
   { categoryId: "cat-europe", month: currentMonth, assignedYen: 65000 },
   { categoryId: "cat-nisa", month: currentMonth, assignedYen: 100000 },
+  { categoryId: "cat-taxable", month: currentMonth, assignedYen: 0 },
   { categoryId: "cat-ideco", month: currentMonth, assignedYen: 23000 },
 ];
 

@@ -26,6 +26,7 @@ export type Category = {
   groupId: string;
   name: string;
   source: "default" | "custom" | "system";
+  isArchived?: boolean;
 };
 
 export type Transaction = {
@@ -128,6 +129,30 @@ export type NisaContribution = {
   year: number;
   accountType: NisaAccountType;
   totalContributed: Yen;
+};
+
+export type IncomeEntriesResponse = {
+  entries: IncomeEntry[];
+  totalIncomeYen: Yen;
+};
+
+export type BudgetAutoPopulateResponse = {
+  month: string;
+  created: boolean;
+  assignments: BudgetAssignment[];
+  incomeEntries: IncomeEntry[];
+  estimatedCategoryIds: string[];
+  warning?: string;
+};
+
+export type NisaCheckResponse = {
+  year: number;
+  accountType: NisaAccountType;
+  requestedYen: Yen;
+  allowedYen: Yen;
+  overflowYen: Yen;
+  remainingAnnualYen: Yen;
+  message?: string;
 };
 
 export type ForecastInputs = {
