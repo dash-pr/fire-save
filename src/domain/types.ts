@@ -13,6 +13,7 @@ export type Account = {
   type: AccountType;
   balanceYen: Yen;
   creditLimit?: Yen;
+  isArchived?: boolean;
 };
 
 export type CategoryGroup = {

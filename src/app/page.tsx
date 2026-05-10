@@ -106,6 +106,7 @@ function weekOfMonth(date: string): string {
 export default function Home() {
   const [activePage, setActivePage] = useState<PageKey>("home");
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
+  const [transactionAccountFilterIds, setTransactionAccountFilterIds] = useState<string[]>([]);
   const [accountState, setAccountState] = useState<Account[]>(accounts);
   const [incomeEntryState, setIncomeEntryState] = useState<IncomeEntry[]>(incomeEntries);
   const [categoryState, setCategoryState] = useState<Category[]>(categories);
@@ -231,7 +232,7 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-[#F5F4F0] text-slate-950">
       <div className="flex">
-        <Sidebar accounts={accountState} netWorthYen={netWorth.netWorthYen} activePage={activePage} onNavigate={(pageKey) => setActivePage(pageKey as PageKey)} />
+        <Sidebar accounts={accountState} investments={investmentState} netWorthYen={netWorth.netWorthYen} activePage={activePage} onNavigate={(pageKey) => setActivePage(pageKey as PageKey)} onAddAccount={(account) => setAccountState((previous) => [...previous, account])} onEditAccount={(id, changes) => setAccountState((previous) => previous.map((account) => account.id === id ? { ...account, ...changes } : account))} onSelectAccount={(accountId) => { setTransactionAccountFilterIds([accountId]); setActivePage("transactions"); }} />
         <main className="min-w-0 flex-1 px-6 py-6 lg:px-8">
           <header className="mb-6 flex items-start justify-between gap-4">
             <div>
@@ -248,7 +249,7 @@ export default function Home() {
 
           {activePage === "budget" && <BudgetPage month={selectedMonth} setMonth={openBudgetMonth} incomeEntries={currentIncomeEntries} setIncomeEntries={setIncomeEntryState} readyToAssignYen={readyToAssignYen} budgetRows={visibleBudgetRows} fullBudgetRows={budgetRows} budgetFilter={budgetFilter} setBudgetFilter={setBudgetFilter} categoryList={activeCategories} setCategories={setCategoryState} transactions={transactionState} setTransactions={setTransactionState} budgetNotice={budgetNotice} estimatedAssignments={estimatedAssignments} setAssignment={(categoryId, value) => setAssignmentState((previous) => ({ ...previous, [budgetKey(selectedMonth, categoryId)]: value }))} assignments={assignments} />}
 
-          {activePage === "transactions" && <TransactionsPage month={selectedMonth} setMonth={setSelectedMonth} transactions={ruledTransactions} rawTransactions={transactionState} setTransactions={setTransactionState} accounts={accountState} categories={activeCategories} merchantRules={merchantRuleState} setMerchantRules={setMerchantRuleState} />}
+          {activePage === "transactions" && <TransactionsPage month={selectedMonth} setMonth={setSelectedMonth} transactions={ruledTransactions} rawTransactions={transactionState} setTransactions={setTransactionState} accounts={accountState} categories={activeCategories} merchantRules={merchantRuleState} setMerchantRules={setMerchantRuleState} initialAccountIds={transactionAccountFilterIds} />}
           {activePage === "debt" && <DebtPage debts={debtState} setDebts={setDebtState} totalMonthlyObligationYen={debtSummary.totalMonthlyObligationYen} totalOutstandingYen={debtSummary.totalOutstandingYen} />}
           {activePage === "goals" && <GoalsPage month={selectedMonth} goals={goalState} setGoals={setGoalState} assignments={assignments} />}
           {activePage === "investments" && <InvestmentsPage investments={investmentState} setInvestments={setInvestmentState} />}
@@ -414,11 +415,14 @@ type TransactionFilterState = {
   type: "all" | "debit" | "credit";
 };
 
-function TransactionsPage({ month, setMonth, transactions, rawTransactions, setTransactions, accounts, categories, merchantRules, setMerchantRules }: { month: string; setMonth: (month: string) => void; transactions: Transaction[]; rawTransactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>>; accounts: Account[]; categories: Category[]; merchantRules: MerchantRule[]; setMerchantRules: Dispatch<SetStateAction<MerchantRule[]>> }) {
-  const [filters, setFilters] = useState<TransactionFilterState>({ search: "", accountIds: [], categoryIds: [], type: "all" });
+function TransactionsPage({ month, setMonth, transactions, rawTransactions, setTransactions, accounts, categories, merchantRules, setMerchantRules, initialAccountIds }: { month: string; setMonth: (month: string) => void; transactions: Transaction[]; rawTransactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>>; accounts: Account[]; categories: Category[]; merchantRules: MerchantRule[]; setMerchantRules: Dispatch<SetStateAction<MerchantRule[]>>; initialAccountIds: string[] }) {
+  const [filters, setFilters] = useState<TransactionFilterState>({ search: "", accountIds: initialAccountIds, categoryIds: [], type: "all" });
   const [groupBy, setGroupBy] = useState<"none" | "category" | "date">("none");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [inlineMessage, setInlineMessage] = useState<string | null>(null);
+  useEffect(() => {
+    if (initialAccountIds.length > 0) setFilters((previous) => ({ ...previous, accountIds: initialAccountIds }));
+  }, [initialAccountIds]);
   const monthTransactions = transactions.filter((transaction) => transaction.date.startsWith(month));
   const filteredTransactions = useMemo(() => {
     const search = normalizeMerchant(filters.search);
