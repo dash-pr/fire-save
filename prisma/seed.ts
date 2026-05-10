@@ -7,8 +7,10 @@ import {
   currentMonth,
   debts,
   forecastInputs,
+  incomeEntries,
   investments,
-  monthlyIncome,
+  merchantRules,
+  nisaContributions,
   savingsGoals,
   transactions,
 } from "../src/data/sample-data";
@@ -21,7 +23,10 @@ async function main() {
   await prisma.transaction.deleteMany();
   await prisma.recurringExpense.deleteMany();
   await prisma.budget.deleteMany();
-  await prisma.monthlyIncome.deleteMany();
+  await prisma.incomeEntry.deleteMany();
+  await prisma.merchantRule.deleteMany();
+  await prisma.nisaContribution.deleteMany();
+  await prisma.goalBalanceUpdate.deleteMany();
   await prisma.savingsGoal.deleteMany();
   await prisma.creditDebt.deleteMany();
   await prisma.investment.deleteMany();
@@ -44,9 +49,9 @@ async function main() {
     data: categories.map((category, index) => ({ ...category, sortOrder: index })),
   });
 
-  await prisma.monthlyIncome.create({
-    data: { month: monthDate, incomeYen: monthlyIncome.incomeYen, note: "Seed monthly salary" },
-  });
+  if (incomeEntries.length > 0) {
+    await prisma.incomeEntry.createMany({ data: incomeEntries });
+  }
 
   await prisma.budget.createMany({
     data: budgetAssignments.map((assignment) => ({
@@ -80,6 +85,12 @@ async function main() {
   });
 
   await prisma.investment.createMany({ data: investments });
+
+  if (merchantRules.length > 0) {
+    await prisma.merchantRule.createMany({ data: merchantRules });
+  }
+
+  await prisma.nisaContribution.createMany({ data: nisaContributions });
 
   await prisma.fatfireSettings.create({
     data: {

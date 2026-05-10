@@ -40,7 +40,7 @@ describe("net worth and health score", () => {
           { id: "checking", name: "Checking", type: "checking", balanceYen: 100_000 },
           { id: "card", name: "Card", type: "credit", balanceYen: -20_000 },
         ],
-        investments: [{ id: "nisa", accountName: "NISA", assetType: "ETF", currentBalanceYen: 300_000, monthlyContributionYen: 10_000, expectedAnnualReturn: 0.05 }],
+        investments: [{ id: "nisa", accountName: "NISA", assetType: "ETF", accountSubtype: "growth", currentBalanceYen: 300_000, monthlyContributionYen: 10_000 }],
         debts: [{ id: "debt", type: "revolving", cardName: "Card", currentBalanceYen: 50_000, monthlyPaymentYen: 10_000, annualInterestRate: 0.15 }],
       }).netWorthYen,
     ).toBe(330_000);

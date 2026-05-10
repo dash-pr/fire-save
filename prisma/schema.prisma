@@ -10,7 +10,6 @@ enum AccountType {
   checking
   savings
   credit
-  brokerage
 }
 
 enum TransactionType {
@@ -46,6 +45,18 @@ enum AssetType {
   other
 }
 
+enum InvestmentAccountSubtype {
+  growth
+  tsumitate
+  ideco
+  taxable
+}
+
+enum NisaAccountType {
+  growth
+  tsumitate
+}
+
 enum UploadStatus {
   pending
   processed
@@ -53,15 +64,16 @@ enum UploadStatus {
 }
 
 model Account {
-  id           String          @id @default(cuid())
-  localUserId  String          @default("local-user")
+  id           String             @id @default(cuid())
+  localUserId  String             @default("local-user")
   name         String
   type         AccountType
   balanceYen   Int
+  creditLimit  Int?
   notes        String?
-  isArchived   Boolean         @default(false)
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
+  isArchived   Boolean            @default(false)
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
   transactions Transaction[]
   recurring    RecurringExpense[]
 
@@ -81,19 +93,20 @@ model CategoryGroup {
 }
 
 model Category {
-  id             String             @id @default(cuid())
-  localUserId    String             @default("local-user")
-  groupId        String
-  name           String
-  source         CategorySource     @default(default)
-  sortOrder      Int                @default(0)
-  isArchived     Boolean            @default(false)
-  group          CategoryGroup      @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  transactions   Transaction[]
-  budgets        Budget[]
-  recurring      RecurringExpense[]
-  savingsGoal    SavingsGoal?
-  creditDebt     CreditDebt?
+  id            String             @id @default(cuid())
+  localUserId   String             @default("local-user")
+  groupId       String
+  name          String
+  source        CategorySource     @default(default)
+  sortOrder     Int                @default(0)
+  isArchived    Boolean            @default(false)
+  group         CategoryGroup      @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  transactions  Transaction[]
+  budgets       Budget[]
+  recurring     RecurringExpense[]
+  savingsGoal   SavingsGoal?
+  creditDebt    CreditDebt?
+  merchantRules MerchantRule[]
 
   @@unique([localUserId, name])
   @@index([groupId])
@@ -123,126 +136,162 @@ model Transaction {
 }
 
 model RecurringExpense {
-  id          String            @id @default(cuid())
-  localUserId String            @default("local-user")
-  accountId   String
-  categoryId  String?
-  payee       String
-  memo        String?
-  amountYen   Int
-  type        TransactionType   @default(debit)
-  dayOfMonth  Int
-  isActive    Boolean           @default(true)
-  lastRunMonth DateTime?        @db.Date
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
-  account     Account           @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  category    Category?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  id           String          @id @default(cuid())
+  localUserId  String          @default("local-user")
+  accountId    String
+  categoryId   String?
+  payee        String
+  memo         String?
+  amountYen    Int
+  type         TransactionType @default(debit)
+  dayOfMonth   Int
+  isActive     Boolean         @default(true)
+  lastRunMonth DateTime?       @db.Date
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  account      Account         @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  category     Category?       @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
   @@index([localUserId, isActive])
 }
 
 model Budget {
-  id          String    @id @default(cuid())
-  localUserId String    @default("local-user")
+  id          String   @id @default(cuid())
+  localUserId String   @default("local-user")
   categoryId  String
-  month       DateTime  @db.Date
-  assignedYen Int       @default(0)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  category    Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  month       DateTime @db.Date
+  assignedYen Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
 
   @@unique([categoryId, month])
   @@index([localUserId, month])
 }
 
-model MonthlyIncome {
+model IncomeEntry {
   id          String   @id @default(cuid())
   localUserId String   @default("local-user")
-  month       DateTime @db.Date
-  incomeYen   Int      @default(0)
-  note        String?
+  month       String
+  sourceName  String
+  amountYen   Int      @default(0)
   createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
 
-  @@unique([localUserId, month])
+  @@index([localUserId, month])
 }
 
 model SavingsGoal {
-  id                  String    @id @default(cuid())
-  localUserId         String    @default("local-user")
-  categoryId          String?   @unique
-  emoji               String    @default("🎯")
-  name                String
-  currentSavedYen      Int       @default(0)
+  id                   String              @id @default(cuid())
+  localUserId          String              @default("local-user")
+  categoryId           String?             @unique
+  emoji                String              @default("🎯")
+  name                 String
+  currentSavedYen      Int                 @default(0)
   targetAmountYen      Int
-  monthlyAllocationYen Int       @default(0)
-  targetDate           DateTime  @db.Date
-  priorityOrder        Int       @default(0)
+  monthlyAllocationYen Int                 @default(0)
+  targetDate           DateTime            @db.Date
+  priorityOrder        Int                 @default(0)
   completedAt          DateTime?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
-  category             Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  category             Category?           @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  balanceUpdates       GoalBalanceUpdate[]
 
   @@unique([localUserId, name])
 }
 
+model GoalBalanceUpdate {
+  id        String      @id @default(cuid())
+  goalId    String
+  amount    Int
+  note      String?
+  updatedAt DateTime    @updatedAt
+  goal      SavingsGoal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@index([goalId, updatedAt])
+}
+
 model CreditDebt {
-  id                    String    @id @default(cuid())
-  localUserId           String    @default("local-user")
-  categoryId            String?   @unique
-  type                  DebtType
-  cardName              String
-  last4                 String?
-  description           String?
-  currentBalanceYen      Int       @default(0)
-  originalAmountYen      Int?
-  monthlyPaymentYen      Int       @default(0)
-  minimumPaymentYen      Int?
-  annualInterestRate     Float     @default(0)
-  totalInstallments      Int?
-  installmentsPaid       Int?
-  expectedBillingDate    DateTime? @db.Date
-  isPaid                Boolean   @default(false)
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
-  category              Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  id                  String    @id @default(cuid())
+  localUserId         String    @default("local-user")
+  categoryId          String?   @unique
+  type                DebtType
+  cardName            String
+  last4               String?
+  description         String?
+  currentBalanceYen   Int       @default(0)
+  originalAmountYen   Int?
+  monthlyPaymentYen   Int       @default(0)
+  minimumPaymentYen   Int?
+  annualInterestRate  Float     @default(0)
+  totalInstallments   Int?
+  installmentsPaid    Int?
+  expectedBillingDate DateTime? @db.Date
+  isPaid              Boolean   @default(false)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  category            Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
   @@index([localUserId, type, isPaid])
 }
 
 model Investment {
-  id                   String    @id @default(cuid())
-  localUserId          String    @default("local-user")
-  accountName          String
-  assetType            AssetType
-  currentBalanceYen     Int
-  monthlyContributionYen Int      @default(0)
-  expectedAnnualReturn  Float     @default(0.05)
-  notes                String?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
+  id                     String                   @id @default(cuid())
+  localUserId            String                   @default("local-user")
+  accountName            String
+  assetType              AssetType
+  accountSubtype         InvestmentAccountSubtype
+  currentBalanceYen      Int                      @default(0)
+  initialInvestedAmount  Int?
+  monthlyContributionYen Int                      @default(0)
+  notes                  String?
+  createdAt              DateTime                 @default(now())
+  updatedAt              DateTime                 @updatedAt
 
   @@unique([localUserId, accountName])
 }
 
+model MerchantRule {
+  id          String   @id @default(cuid())
+  localUserId String   @default("local-user")
+  pattern     String
+  categoryId  String
+  fuzzyMatch  Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@index([localUserId, pattern])
+}
+
+model NisaContribution {
+  id               String          @id @default(cuid())
+  localUserId      String          @default("local-user")
+  year             Int
+  accountType      NisaAccountType
+  totalContributed Int             @default(0)
+  updatedAt        DateTime        @updatedAt
+
+  @@unique([localUserId, year, accountType])
+}
+
 model FatfireSettings {
-  id                              String   @id @default("default")
-  localUserId                     String   @default("local-user")
-  dateOfBirth                     DateTime @db.Date
-  currentAge                      Int      @default(30)
-  targetRetirementAge             Int      @default(50)
-  currentLiquidSavingsYen          Int      @default(0)
-  currentInvestmentsOverrideYen    Int?
-  monthlyInvestmentOverrideYen     Int?
-  expectedAnnualReturn             Float    @default(0.05)
-  inflationRate                    Float    @default(0.02)
-  targetAnnualRetirementSpendYen    Int      @default(6000000)
-  safeWithdrawalRate               Float    @default(0.04)
-  returnVolatility                 Float    @default(0.10)
-  retirementEndAge                 Int      @default(90)
-  reserveThresholdYen              Int      @default(3000000)
-  updatedAt                       DateTime @updatedAt
+  id                             String   @id @default("default")
+  localUserId                    String   @default("local-user")
+  dateOfBirth                    DateTime @db.Date
+  currentAge                     Int      @default(30)
+  targetRetirementAge            Int      @default(50)
+  currentLiquidSavingsYen        Int      @default(0)
+  currentInvestmentsOverrideYen  Int?
+  monthlyInvestmentOverrideYen   Int?
+  expectedAnnualReturn           Float    @default(0.05)
+  inflationRate                  Float    @default(0.02)
+  targetAnnualRetirementSpendYen Int      @default(6000000)
+  safeWithdrawalRate             Float    @default(0.04)
+  returnVolatility               Float    @default(0.10)
+  retirementEndAge               Int      @default(90)
+  reserveThresholdYen            Int      @default(3000000)
+  updatedAt                      DateTime @updatedAt
 }
 
 model FinancialSnapshot {
@@ -258,31 +307,31 @@ model FinancialSnapshot {
 }
 
 model UploadedDocument {
-  id             String            @id @default(cuid())
-  localUserId    String            @default("local-user")
+  id             String        @id @default(cuid())
+  localUserId    String        @default("local-user")
   fileName       String
   storagePath    String
   mimeType       String
-  status         UploadStatus      @default(pending)
-  extractedCount Int               @default(0)
+  status         UploadStatus  @default(pending)
+  extractedCount Int           @default(0)
   errorMessage   String?
-  createdAt      DateTime          @default(now())
-  updatedAt      DateTime          @updatedAt
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
   transactions   Transaction[]
 
   @@index([localUserId, status])
 }
 
 model AiInsight {
-  id          String   @id @default(cuid())
-  localUserId String   @default("local-user")
-  month       DateTime @db.Date
-  summary     String
-  insight     String
+  id             String   @id @default(cuid())
+  localUserId    String   @default("local-user")
+  month          DateTime @db.Date
+  summary        String
+  insight        String
   recommendation String
-  model       String   @default("gpt-4o-mini")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  model          String   @default("gpt-4o-mini")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   @@unique([localUserId, month])
 }

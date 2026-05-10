@@ -5,8 +5,11 @@ import type {
   CategoryGroup,
   CreditDebt,
   ForecastInputs,
+  IncomeEntry,
   Investment,
   MonthlyIncome,
+  MerchantRule,
+  NisaContribution,
   SavingsGoal,
   Transaction,
 } from "@/domain/types";
@@ -16,7 +19,7 @@ export const currentMonth = "2026-05";
 export const accounts: Account[] = [
   { id: "acct-checking", name: "SMBC Checking", type: "checking", balanceYen: 820000 },
   { id: "acct-savings", name: "Emergency Savings", type: "savings", balanceYen: 1250000 },
-  { id: "acct-card", name: "Rakuten Card", type: "credit", balanceYen: -180000 },
+  { id: "acct-card", name: "Rakuten Card", type: "credit", balanceYen: -180000, creditLimit: 800000 },
 ];
 
 export const categories: Category[] = [
@@ -43,7 +46,9 @@ export const categoryGroups: CategoryGroup[] = [
   { id: "grp-investments", name: "Investments", categories: categories.filter((category) => category.groupId === "grp-investments") },
 ];
 
-export const monthlyIncome: MonthlyIncome = { month: currentMonth, incomeYen: 780000 };
+export const monthlyIncome: MonthlyIncome = { month: currentMonth, incomeYen: 0 };
+
+export const incomeEntries: IncomeEntry[] = [];
 
 export const budgetAssignments: BudgetAssignment[] = [
   { categoryId: "cat-rent", month: currentMonth, assignedYen: 240000 },
@@ -87,8 +92,17 @@ export const debts: CreditDebt[] = [
 ];
 
 export const investments: Investment[] = [
-  { id: "inv-nisa", accountName: "SBI NISA", assetType: "ETF", currentBalanceYen: 3250000, monthlyContributionYen: 100000, expectedAnnualReturn: 0.055 },
-  { id: "inv-ideco", accountName: "iDeCo", assetType: "mutual_fund", currentBalanceYen: 920000, monthlyContributionYen: 23000, expectedAnnualReturn: 0.045 },
+  { id: "inv-nisa-growth", accountName: "SBI NISA Growth", assetType: "ETF", accountSubtype: "growth", currentBalanceYen: 0, monthlyContributionYen: 0, notes: "成長投資枠" },
+  { id: "inv-nisa-tsumitate", accountName: "SBI NISA Tsumitate", assetType: "mutual_fund", accountSubtype: "tsumitate", currentBalanceYen: 0, monthlyContributionYen: 0, notes: "積立NISA" },
+  { id: "inv-ideco", accountName: "iDeCo", assetType: "mutual_fund", accountSubtype: "ideco", currentBalanceYen: 0, monthlyContributionYen: 0 },
+  { id: "inv-taxable", accountName: "Taxable Brokerage", assetType: "ETF", accountSubtype: "taxable", currentBalanceYen: 0, monthlyContributionYen: 0 },
+];
+
+export const merchantRules: MerchantRule[] = [];
+
+export const nisaContributions: NisaContribution[] = [
+  { id: "nisa-2026-growth", year: 2026, accountType: "growth", totalContributed: 0 },
+  { id: "nisa-2026-tsumitate", year: 2026, accountType: "tsumitate", totalContributed: 0 },
 ];
 
 export const forecastInputs: ForecastInputs = {
@@ -96,12 +110,12 @@ export const forecastInputs: ForecastInputs = {
   currentAge: 30,
   targetRetirementAge: 50,
   retirementEndAge: 90,
-  currentPortfolioYen: investments.reduce((total, investment) => total + investment.currentBalanceYen, 0),
-  monthlyContributionYen: investments.reduce((total, investment) => total + investment.monthlyContributionYen, 0),
-  expectedAnnualReturn: 0.05,
+  currentPortfolioYen: 0,
+  monthlyContributionYen: 150000,
+  expectedAnnualReturn: 0.07,
   inflationRate: 0.02,
   targetAnnualRetirementSpendYen: 6000000,
   safeWithdrawalRate: 0.04,
-  returnVolatility: 0.1,
+  returnVolatility: 0.12,
   reserveThresholdYen: 3000000,
 };

@@ -1,15 +1,18 @@
 export type Yen = number;
 
-export type AccountType = "checking" | "savings" | "credit" | "brokerage";
+export type AccountType = "checking" | "savings" | "credit";
 export type TransactionType = "debit" | "credit";
 export type DebtType = "revolving" | "installment" | "lump_sum";
 export type AssetType = "stocks" | "ETF" | "mutual_fund" | "cash" | "crypto" | "other";
+export type InvestmentAccountSubtype = "growth" | "tsumitate" | "ideco" | "taxable";
+export type NisaAccountType = "growth" | "tsumitate";
 
 export type Account = {
   id: string;
   name: string;
   type: AccountType;
   balanceYen: Yen;
+  creditLimit?: Yen;
 };
 
 export type CategoryGroup = {
@@ -48,6 +51,14 @@ export type MonthlyIncome = {
   incomeYen: Yen;
 };
 
+export type IncomeEntry = {
+  id: string;
+  month: string;
+  sourceName: string;
+  amountYen: Yen;
+  createdAt?: string;
+};
+
 export type BudgetStatus = "overspent" | "underfunded" | "funded";
 
 export type BudgetRow = {
@@ -81,16 +92,42 @@ export type SavingsGoal = {
   targetAmountYen: Yen;
   monthlyAllocationYen: Yen;
   targetDate: string;
+  notes?: string;
   completedAt?: string;
+};
+
+export type GoalBalanceUpdate = {
+  id: string;
+  goalId: string;
+  amount: Yen;
+  note?: string;
+  updatedAt?: string;
 };
 
 export type Investment = {
   id: string;
   accountName: string;
   assetType: AssetType;
+  accountSubtype: InvestmentAccountSubtype;
   currentBalanceYen: Yen;
+  initialInvestedAmount?: Yen;
   monthlyContributionYen: Yen;
-  expectedAnnualReturn: number;
+  notes?: string;
+};
+
+export type MerchantRule = {
+  id: string;
+  pattern: string;
+  categoryId: string;
+  fuzzyMatch: boolean;
+  createdAt?: string;
+};
+
+export type NisaContribution = {
+  id: string;
+  year: number;
+  accountType: NisaAccountType;
+  totalContributed: Yen;
 };
 
 export type ForecastInputs = {

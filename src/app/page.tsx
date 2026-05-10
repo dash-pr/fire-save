@@ -43,7 +43,7 @@ import {
   simulateWithdrawalSurvival,
   type MonteCarloResult,
 } from "@/domain/forecast";
-import { calculateHealthScore, calculateNetWorth, calculateWeightedReturn } from "@/domain/finance";
+import { calculateHealthScore, calculateNetWorth } from "@/domain/finance";
 import type { Account, CreditDebt, ForecastInputs, Investment, SavingsGoal } from "@/domain/types";
 import { formatJPY, formatMonth, formatPercent } from "@/lib/format";
 
@@ -106,7 +106,6 @@ export default function Home() {
   const drawdown = simulation ? analyzeDrawdowns(simulation.maxDrawdowns) : null;
   const uncategorizedCount = transactions.filter((transaction) => !transaction.categoryId).length;
   const overspentCount = budgetRows.filter((row) => row.status === "overspent").length;
-  const weightedReturn = calculateWeightedReturn(investmentState);
   const health = calculateHealthScore({
     savingsRate,
     emergencyFundMonths: (accountState.find((account) => account.type === "savings")?.balanceYen ?? 0) / Math.max(totalExpensesYen, 1),
@@ -146,7 +145,7 @@ export default function Home() {
           {activePage === "transactions" && <TransactionsPage uncategorizedCount={uncategorizedCount} />}
           {activePage === "debt" && <DebtPage debts={debtState} setDebts={setDebtState} totalMonthlyObligationYen={debtSummary.totalMonthlyObligationYen} totalOutstandingYen={debtSummary.totalOutstandingYen} />}
           {activePage === "goals" && <GoalsPage goals={goalState} setGoals={setGoalState} />}
-          {activePage === "investments" && <InvestmentsPage investments={investmentState} setInvestments={setInvestmentState} weightedReturn={weightedReturn} />}
+          {activePage === "investments" && <InvestmentsPage investments={investmentState} setInvestments={setInvestmentState} />}
           {activePage === "forecast" && <ForecastPage inputs={effectiveForecastInputs} assumptions={assumptions} setAssumption={setAssumption} deterministic={deterministic} simulation={simulation} setSimulation={setSimulation} drawdown={drawdown} withdrawal={withdrawal} />}
           {activePage === "reports" && <ReportsPage budgetRows={budgetRows} netWorthYen={netWorth.netWorthYen} incomeYen={incomeYen} totalExpensesYen={totalExpensesYen} />}
           {activePage === "import" && <ImportPage />}
@@ -237,9 +236,9 @@ function GoalsPage({ goals, setGoals }: { goals: SavingsGoal[]; setGoals: (goals
   return <section className="grid gap-6 xl:grid-cols-2">{goals.map((goal) => { const progress = (goal.currentSavedYen / goal.targetAmountYen) * 100; return <Card key={goal.id} title={`${goal.emoji} ${goal.name}`} eyebrow="Savings target"><ProgressBar value={progress} /><p className="mt-3 text-sm text-slate-500">{formatJPY(goal.currentSavedYen)} of {formatJPY(goal.targetAmountYen)} · target {goal.targetDate}</p><div className="mt-4 grid gap-3 md:grid-cols-3"><CurrencyInput label="Saved" value={goal.currentSavedYen} onChange={(value) => updateGoal(goal.id, { currentSavedYen: value })} /><CurrencyInput label="Target" value={goal.targetAmountYen} onChange={(value) => updateGoal(goal.id, { targetAmountYen: value })} /><CurrencyInput label="Monthly" value={goal.monthlyAllocationYen} onChange={(value) => updateGoal(goal.id, { monthlyAllocationYen: value })} /></div></Card>; })}</section>;
 }
 
-function InvestmentsPage({ investments, setInvestments, weightedReturn }: { investments: Investment[]; setInvestments: (investments: Investment[]) => void; weightedReturn: number }) {
+function InvestmentsPage({ investments, setInvestments }: { investments: Investment[]; setInvestments: (investments: Investment[]) => void }) {
   const updateInvestment = (id: string, changes: Partial<Investment>) => setInvestments(investments.map((investment) => investment.id === id ? { ...investment, ...changes } : investment));
-  return <div className="space-y-6"><section className="grid gap-4 xl:grid-cols-3"><MetricCard label="Invested Assets" value={formatJPY(investments.reduce((total, investment) => total + investment.currentBalanceYen, 0))} detail="Manual portfolio total" tone="green" /><MetricCard label="Monthly Contributions" value={formatJPY(investments.reduce((total, investment) => total + investment.monthlyContributionYen, 0))} detail="Used by forecast" tone="blue" /><MetricCard label="Expected Return" value={formatPercent(weightedReturn, 1)} detail="Weighted by balance" /></section><section className="grid gap-6 xl:grid-cols-2">{investments.map((investment) => <Card key={investment.id} title={investment.accountName} eyebrow={investment.assetType}><div className="grid gap-3 md:grid-cols-3"><CurrencyInput label="Balance" value={investment.currentBalanceYen} onChange={(value) => updateInvestment(investment.id, { currentBalanceYen: value })} /><CurrencyInput label="Contribution" value={investment.monthlyContributionYen} onChange={(value) => updateInvestment(investment.id, { monthlyContributionYen: value })} /><PercentInput label="Expected return" value={investment.expectedAnnualReturn} onChange={(value) => updateInvestment(investment.id, { expectedAnnualReturn: value })} /></div></Card>)}</section></div>;
+  return <div className="space-y-6"><section className="grid gap-4 xl:grid-cols-3"><MetricCard label="Invested Assets" value={formatJPY(investments.reduce((total, investment) => total + investment.currentBalanceYen, 0))} detail="Manual portfolio total" tone="green" /><MetricCard label="Monthly Contributions" value={formatJPY(investments.reduce((total, investment) => total + investment.monthlyContributionYen, 0))} detail="Used by forecast" tone="blue" /><MetricCard label="Return Assumption" value="Forecast only" detail="Expected return now lives in FATFire Forecast" /></section><section className="grid gap-6 xl:grid-cols-2">{investments.map((investment) => <Card key={investment.id} title={investment.accountName} eyebrow={investment.accountSubtype}><div className="grid gap-3 md:grid-cols-2"><CurrencyInput label="Balance" value={investment.currentBalanceYen} onChange={(value) => updateInvestment(investment.id, { currentBalanceYen: value })} /><CurrencyInput label="Contribution" value={investment.monthlyContributionYen} onChange={(value) => updateInvestment(investment.id, { monthlyContributionYen: value })} /></div></Card>)}</section></div>;
 }
 
 function ForecastPage({ inputs, assumptions, setAssumption, deterministic, simulation, setSimulation, drawdown, withdrawal }: { inputs: ForecastInputs; assumptions: ForecastInputs; setAssumption: (field: keyof ForecastInputs, value: string | number | undefined) => void; deterministic: ReturnType<typeof calculateDeterministicForecast>; simulation: MonteCarloResult | null; setSimulation: (result: MonteCarloResult) => void; drawdown: ReturnType<typeof analyzeDrawdowns> | null; withdrawal: ReturnType<typeof simulateWithdrawalSurvival> }) {

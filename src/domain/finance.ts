@@ -29,10 +29,7 @@ export function calculateEmergencyFundMonths(liquidSavingsYen: Yen, averageMonth
 export function calculateWeightedReturn(investments: Investment[]): number {
   const total = investments.reduce((sum, investment) => sum + investment.currentBalanceYen, 0);
   if (total <= 0) return 0;
-  return investments.reduce(
-    (sum, investment) => sum + investment.expectedAnnualReturn * (investment.currentBalanceYen / total),
-    0,
-  );
+  return 0;
 }
 
 function clampScore(value: number): number {
