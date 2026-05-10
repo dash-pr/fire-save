@@ -1,0 +1,288 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AccountType {
+  checking
+  savings
+  credit
+  brokerage
+}
+
+enum TransactionType {
+  debit
+  credit
+}
+
+enum TransactionSource {
+  manual
+  OCR
+  CSV
+  recurring
+}
+
+enum CategorySource {
+  default
+  custom
+  system
+}
+
+enum DebtType {
+  revolving
+  installment
+  lump_sum
+}
+
+enum AssetType {
+  stocks
+  ETF
+  mutual_fund
+  cash
+  crypto
+  other
+}
+
+enum UploadStatus {
+  pending
+  processed
+  failed
+}
+
+model Account {
+  id           String          @id @default(cuid())
+  localUserId  String          @default("local-user")
+  name         String
+  type         AccountType
+  balanceYen   Int
+  notes        String?
+  isArchived   Boolean         @default(false)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  transactions Transaction[]
+  recurring    RecurringExpense[]
+
+  @@unique([localUserId, name])
+  @@index([localUserId, type])
+}
+
+model CategoryGroup {
+  id          String     @id @default(cuid())
+  localUserId String     @default("local-user")
+  name        String
+  sortOrder   Int        @default(0)
+  isCollapsed Boolean    @default(false)
+  categories  Category[]
+
+  @@unique([localUserId, name])
+}
+
+model Category {
+  id             String             @id @default(cuid())
+  localUserId    String             @default("local-user")
+  groupId        String
+  name           String
+  source         CategorySource     @default(default)
+  sortOrder      Int                @default(0)
+  isArchived     Boolean            @default(false)
+  group          CategoryGroup      @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  transactions   Transaction[]
+  budgets        Budget[]
+  recurring      RecurringExpense[]
+  savingsGoal    SavingsGoal?
+  creditDebt     CreditDebt?
+
+  @@unique([localUserId, name])
+  @@index([groupId])
+}
+
+model Transaction {
+  id          String            @id @default(cuid())
+  localUserId String            @default("local-user")
+  accountId   String
+  categoryId  String?
+  date        DateTime          @db.Date
+  payee       String
+  memo        String?
+  amountYen   Int
+  type        TransactionType
+  source      TransactionSource @default(manual)
+  documentId  String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  account     Account           @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  category    Category?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  document    UploadedDocument? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([localUserId, date])
+  @@index([accountId, date])
+  @@index([categoryId, date])
+}
+
+model RecurringExpense {
+  id          String            @id @default(cuid())
+  localUserId String            @default("local-user")
+  accountId   String
+  categoryId  String?
+  payee       String
+  memo        String?
+  amountYen   Int
+  type        TransactionType   @default(debit)
+  dayOfMonth  Int
+  isActive    Boolean           @default(true)
+  lastRunMonth DateTime?        @db.Date
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  account     Account           @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  category    Category?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@index([localUserId, isActive])
+}
+
+model Budget {
+  id          String    @id @default(cuid())
+  localUserId String    @default("local-user")
+  categoryId  String
+  month       DateTime  @db.Date
+  assignedYen Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  category    Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([categoryId, month])
+  @@index([localUserId, month])
+}
+
+model MonthlyIncome {
+  id          String   @id @default(cuid())
+  localUserId String   @default("local-user")
+  month       DateTime @db.Date
+  incomeYen   Int      @default(0)
+  note        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([localUserId, month])
+}
+
+model SavingsGoal {
+  id                  String    @id @default(cuid())
+  localUserId         String    @default("local-user")
+  categoryId          String?   @unique
+  emoji               String    @default("🎯")
+  name                String
+  currentSavedYen      Int       @default(0)
+  targetAmountYen      Int
+  monthlyAllocationYen Int       @default(0)
+  targetDate           DateTime  @db.Date
+  priorityOrder        Int       @default(0)
+  completedAt          DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  category             Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@unique([localUserId, name])
+}
+
+model CreditDebt {
+  id                    String    @id @default(cuid())
+  localUserId           String    @default("local-user")
+  categoryId            String?   @unique
+  type                  DebtType
+  cardName              String
+  last4                 String?
+  description           String?
+  currentBalanceYen      Int       @default(0)
+  originalAmountYen      Int?
+  monthlyPaymentYen      Int       @default(0)
+  minimumPaymentYen      Int?
+  annualInterestRate     Float     @default(0)
+  totalInstallments      Int?
+  installmentsPaid       Int?
+  expectedBillingDate    DateTime? @db.Date
+  isPaid                Boolean   @default(false)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  category              Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@index([localUserId, type, isPaid])
+}
+
+model Investment {
+  id                   String    @id @default(cuid())
+  localUserId          String    @default("local-user")
+  accountName          String
+  assetType            AssetType
+  currentBalanceYen     Int
+  monthlyContributionYen Int      @default(0)
+  expectedAnnualReturn  Float     @default(0.05)
+  notes                String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@unique([localUserId, accountName])
+}
+
+model FatfireSettings {
+  id                              String   @id @default("default")
+  localUserId                     String   @default("local-user")
+  dateOfBirth                     DateTime @db.Date
+  currentAge                      Int      @default(30)
+  targetRetirementAge             Int      @default(50)
+  currentLiquidSavingsYen          Int      @default(0)
+  currentInvestmentsOverrideYen    Int?
+  monthlyInvestmentOverrideYen     Int?
+  expectedAnnualReturn             Float    @default(0.05)
+  inflationRate                    Float    @default(0.02)
+  targetAnnualRetirementSpendYen    Int      @default(6000000)
+  safeWithdrawalRate               Float    @default(0.04)
+  returnVolatility                 Float    @default(0.10)
+  retirementEndAge                 Int      @default(90)
+  reserveThresholdYen              Int      @default(3000000)
+  updatedAt                       DateTime @updatedAt
+}
+
+model FinancialSnapshot {
+  id             String   @id @default(cuid())
+  localUserId    String   @default("local-user")
+  date           DateTime @db.Date
+  assetsYen      Int
+  liabilitiesYen Int
+  netWorthYen    Int
+  createdAt      DateTime @default(now())
+
+  @@unique([localUserId, date])
+}
+
+model UploadedDocument {
+  id             String            @id @default(cuid())
+  localUserId    String            @default("local-user")
+  fileName       String
+  storagePath    String
+  mimeType       String
+  status         UploadStatus      @default(pending)
+  extractedCount Int               @default(0)
+  errorMessage   String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  transactions   Transaction[]
+
+  @@index([localUserId, status])
+}
+
+model AiInsight {
+  id          String   @id @default(cuid())
+  localUserId String   @default("local-user")
+  month       DateTime @db.Date
+  summary     String
+  insight     String
+  recommendation String
+  model       String   @default("gpt-4o-mini")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([localUserId, month])
+}

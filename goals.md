@@ -12,6 +12,12 @@ Latest workflow preferences:
 - Use `npx create` inside this directory directly.
 - Use subagents as much as useful.
 - Deprioritize mobile polish compared with desktop MVP functionality.
+- Deprioritize automated tests until the core product pages and calculations feel correct.
+- Make sidebar navigation functional, even if initial navigation is client-side.
+- Keep each page purposeful: Home is the full finance snapshot; Budget is only budgeting and allocation.
+- Use production-ready product language, not prototype or implementation labels.
+- Default date of birth is February 1, 1996, and FATFire output should emphasize FATFire age.
+- Core default values must be manually editable and calculations must update from edited values.
 
 ## Product Vision
 

@@ -1,65 +1,301 @@
-import Image from "next/image";
+"use client";
+
+import { useMemo, useState } from "react";
+import type { ReactNode } from "react";
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import { Bot, CheckCircle2, CircleAlert, SlidersHorizontal, UploadCloud } from "lucide-react";
+import { Sidebar } from "@/components/layout/sidebar";
+import { Card, MetricCard } from "@/components/shared/card";
+import { ProgressBar, StatusPill } from "@/components/shared/progress";
+import {
+  accounts,
+  budgetAssignments,
+  categories,
+  categoryGroups,
+  currentMonth,
+  debts,
+  forecastInputs,
+  investments,
+  monthlyIncome,
+  savingsGoals,
+  transactions,
+} from "@/data/sample-data";
+import { buildBudgetRows, calculateReadyToAssignYen, calculateSavingsRate } from "@/domain/budget";
+import { calculateBunkatsuRemaining, calculateDebtSummary, calculateRiboPayoff } from "@/domain/debt";
+import {
+  analyzeDrawdowns,
+  calculateAgeFromDob,
+  calculateDeterministicForecast,
+  getCurrentAge,
+  runMonteCarloSimulation,
+  simulateWithdrawalSurvival,
+  type MonteCarloResult,
+} from "@/domain/forecast";
+import { calculateHealthScore, calculateNetWorth, calculateWeightedReturn } from "@/domain/finance";
+import type { Account, CreditDebt, ForecastInputs, Investment, SavingsGoal } from "@/domain/types";
+import { formatJPY, formatMonth, formatPercent } from "@/lib/format";
+
+type PageKey = "home" | "budget" | "transactions" | "debt" | "goals" | "investments" | "forecast" | "reports" | "import" | "settings";
+
+const pageTitles: Record<PageKey, { title: string; subtitle: string }> = {
+  home: { title: "Financial Overview", subtitle: "A concise operating view for this month, focused on decisions that need attention." },
+  budget: { title: "Monthly Budget", subtitle: "Assign income to categories, review activity, and keep available balances accurate." },
+  transactions: { title: "Transaction Review", subtitle: "Review spending, identify uncategorized activity, and prepare imports for categorization." },
+  debt: { title: "Debt Payoff Plan", subtitle: "Track ribo-barai, bunkatsu-barai, and upcoming ikkatsu liabilities with editable assumptions." },
+  goals: { title: "Savings Goals", subtitle: "Monitor goal funding and monthly allocations that feed the budget." },
+  investments: { title: "Investment Plan", subtitle: "Maintain manual balances, contributions, and return assumptions used by the forecast." },
+  forecast: { title: "FATFire Projection", subtitle: "Model FATFire age, risk, drawdowns, and retirement survival from editable assumptions." },
+  reports: { title: "Reports", subtitle: "Review spending allocation, net worth, and income-versus-expense trends." },
+  import: { title: "Add Transactions", subtitle: "Upload CSV or Japanese statements, review extracted rows, and confirm only verified transactions." },
+  settings: { title: "Planning Defaults", subtitle: "Edit the default values that drive calculations across the local planning workspace." },
+};
+
+const compactCurrency = (value: number) => `¥${Math.round(value / 1_000_000)}M`;
 
 export default function Home() {
+  const [activePage, setActivePage] = useState<PageKey>("home");
+  const [accountState, setAccountState] = useState<Account[]>(accounts);
+  const [incomeYen, setIncomeYen] = useState(monthlyIncome.incomeYen);
+  const [assignmentState, setAssignmentState] = useState<Record<string, number>>(
+    Object.fromEntries(budgetAssignments.map((assignment) => [assignment.categoryId, assignment.assignedYen])),
+  );
+  const [debtState, setDebtState] = useState<CreditDebt[]>(debts);
+  const [goalState, setGoalState] = useState<SavingsGoal[]>(savingsGoals);
+  const [investmentState, setInvestmentState] = useState<Investment[]>(investments);
+  const [assumptions, setAssumptions] = useState<ForecastInputs>(forecastInputs);
+  const [simulation, setSimulation] = useState<MonteCarloResult | null>(null);
+  const [budgetFilter, setBudgetFilter] = useState<"all" | "overspent" | "underfunded" | "funded">("all");
+
+  const currentAge = getCurrentAge(assumptions);
+  const currentPortfolioYen = investmentState.reduce((total, investment) => total + investment.currentBalanceYen, 0);
+  const monthlyContributionYen = investmentState.reduce((total, investment) => total + investment.monthlyContributionYen, 0);
+  const effectiveForecastInputs: ForecastInputs = {
+    ...assumptions,
+    currentAge,
+    currentPortfolioYen: assumptions.currentInvestmentsOverrideYen ?? currentPortfolioYen,
+    monthlyContributionYen: assumptions.monthlyInvestmentOverrideYen ?? monthlyContributionYen,
+  };
+  const assignments = useMemo(
+    () => categories.map((category) => ({ categoryId: category.id, month: currentMonth, assignedYen: assignmentState[category.id] ?? 0 })),
+    [assignmentState],
+  );
+  const budgetRows = useMemo(
+    () => buildBudgetRows({ categories, assignments, transactions, month: currentMonth }),
+    [assignments],
+  );
+  const visibleBudgetRows = budgetRows.filter((row) => budgetFilter === "all" || row.status === budgetFilter);
+  const readyToAssignYen = calculateReadyToAssignYen(incomeYen, assignments);
+  const totalExpensesYen = transactions.filter((transaction) => transaction.type === "debit").reduce((total, transaction) => total + transaction.amountYen, 0);
+  const savingsRate = calculateSavingsRate(incomeYen, totalExpensesYen);
+  const netWorth = calculateNetWorth({ accounts: accountState, investments: investmentState, debts: debtState });
+  const debtSummary = calculateDebtSummary(debtState);
+  const deterministic = calculateDeterministicForecast(effectiveForecastInputs);
+  const withdrawal = simulateWithdrawalSurvival(effectiveForecastInputs, deterministic.targetPortfolioYen, 500);
+  const drawdown = simulation ? analyzeDrawdowns(simulation.maxDrawdowns) : null;
+  const uncategorizedCount = transactions.filter((transaction) => !transaction.categoryId).length;
+  const overspentCount = budgetRows.filter((row) => row.status === "overspent").length;
+  const weightedReturn = calculateWeightedReturn(investmentState);
+  const health = calculateHealthScore({
+    savingsRate,
+    emergencyFundMonths: (accountState.find((account) => account.type === "savings")?.balanceYen ?? 0) / Math.max(totalExpensesYen, 1),
+    debtServiceRatio: debtSummary.totalMonthlyObligationYen / incomeYen,
+    monthlyCashFlowYen: incomeYen - totalExpensesYen,
+    monthlyInvestmentContributionYen: monthlyContributionYen,
+    monthlyIncomeYen: incomeYen,
+  });
+
+  const setAssumption = (field: keyof ForecastInputs, value: string | number | undefined) => {
+    setAssumptions((previous) => ({ ...previous, [field]: value }));
+    setSimulation(null);
+  };
+
+  const page = pageTitles[activePage];
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+    <div className="min-h-screen bg-[#F5F4F0] text-slate-950">
+      <div className="flex">
+        <Sidebar accounts={accountState} netWorthYen={netWorth.netWorthYen} activePage={activePage} onNavigate={(pageKey) => setActivePage(pageKey as PageKey)} />
+        <main className="min-w-0 flex-1 px-6 py-6 lg:px-8">
+          <header className="mb-6 flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium uppercase tracking-[0.18em] text-slate-500">{formatMonth(currentMonth)}</p>
+              <h1 className="mt-2 text-4xl font-semibold tracking-tight">{page.title}</h1>
+              <p className="mt-2 max-w-3xl text-slate-600">{page.subtitle}</p>
+            </div>
+            <button type="button" onClick={() => setActivePage("settings")} className="hidden items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 lg:flex">
+              <SlidersHorizontal className="h-4 w-4" /> Edit defaults
+            </button>
+          </header>
+
+          {activePage === "home" && <HomePage readyToAssignYen={readyToAssignYen} netWorthYen={netWorth.netWorthYen} savingsRate={savingsRate} fatfireAge={deterministic.estimatedFatfireAge} healthScore={health.score} uncategorizedCount={uncategorizedCount} overspentCount={overspentCount} contributionDeltaYen={deterministic.contributionDeltaYen} accounts={accountState} onNavigate={setActivePage} />}
+
+          {activePage === "budget" && <BudgetPage incomeYen={incomeYen} setIncomeYen={setIncomeYen} readyToAssignYen={readyToAssignYen} budgetRows={visibleBudgetRows} fullBudgetRows={budgetRows} budgetFilter={budgetFilter} setBudgetFilter={setBudgetFilter} setAssignment={(categoryId, value) => setAssignmentState((previous) => ({ ...previous, [categoryId]: value }))} />}
+
+          {activePage === "transactions" && <TransactionsPage uncategorizedCount={uncategorizedCount} />}
+          {activePage === "debt" && <DebtPage debts={debtState} setDebts={setDebtState} totalMonthlyObligationYen={debtSummary.totalMonthlyObligationYen} totalOutstandingYen={debtSummary.totalOutstandingYen} />}
+          {activePage === "goals" && <GoalsPage goals={goalState} setGoals={setGoalState} />}
+          {activePage === "investments" && <InvestmentsPage investments={investmentState} setInvestments={setInvestmentState} weightedReturn={weightedReturn} />}
+          {activePage === "forecast" && <ForecastPage inputs={effectiveForecastInputs} assumptions={assumptions} setAssumption={setAssumption} deterministic={deterministic} simulation={simulation} setSimulation={setSimulation} drawdown={drawdown} withdrawal={withdrawal} />}
+          {activePage === "reports" && <ReportsPage budgetRows={budgetRows} netWorthYen={netWorth.netWorthYen} incomeYen={incomeYen} totalExpensesYen={totalExpensesYen} />}
+          {activePage === "import" && <ImportPage />}
+          {activePage === "settings" && <SettingsPage assumptions={assumptions} setAssumption={setAssumption} incomeYen={incomeYen} setIncomeYen={setIncomeYen} accounts={accountState} setAccounts={setAccountState} investments={investmentState} setInvestments={setInvestmentState} debts={debtState} setDebts={setDebtState} goals={goalState} setGoals={setGoalState} />}
+        </main>
+      </div>
     </div>
   );
+}
+
+function HomePage({ readyToAssignYen, netWorthYen, savingsRate, fatfireAge, healthScore, uncategorizedCount, overspentCount, contributionDeltaYen, accounts, onNavigate }: { readyToAssignYen: number; netWorthYen: number; savingsRate: number; fatfireAge: number | null; healthScore: number; uncategorizedCount: number; overspentCount: number; contributionDeltaYen: number; accounts: Account[]; onNavigate: (page: PageKey) => void }) {
+  return (
+    <div className="space-y-6">
+      <section className="grid gap-4 xl:grid-cols-4">
+        <MetricCard label="Ready to Assign" value={formatJPY(readyToAssignYen)} detail="Available for this month" tone="blue" />
+        <MetricCard label="Net Worth" value={formatJPY(netWorthYen)} detail="Assets minus liabilities" />
+        <MetricCard label="Savings Rate" value={formatPercent(savingsRate)} detail="Current month actuals" tone="green" />
+        <MetricCard label="FATFire Age" value={fatfireAge ? fatfireAge.toFixed(1) : "Not reached"} detail="Based on current assumptions" tone="amber" />
+      </section>
+
+      <section className="grid gap-6 xl:grid-cols-[1fr_0.9fr]">
+        <Card title="Priority actions" eyebrow="Needs attention">
+          <div className="mb-4 rounded-2xl bg-slate-50 p-4">
+            <p className="text-sm font-semibold text-slate-700">Financial health score</p>
+            <div className="mt-3 flex items-center gap-4">
+              <div className="text-3xl font-semibold tabular-nums">{healthScore}</div>
+              <ProgressBar value={healthScore} className="flex-1" />
+            </div>
+          </div>
+          <div className="grid gap-3">
+            <ActionButton title="Review uncategorized transactions" detail={`${uncategorizedCount} item needs a category before reports are final.`} tone="amber" onClick={() => onNavigate("transactions")} />
+            <ActionButton title="Resolve overspent categories" detail={`${overspentCount} category balance needs a funding decision.`} tone={overspentCount > 0 ? "red" : "green"} onClick={() => onNavigate("budget")} />
+            <ActionButton title="Review required contribution" detail={`${formatJPY(Math.max(contributionDeltaYen, 0))} more per month needed for the target age.`} tone="blue" onClick={() => onNavigate("forecast")} />
+          </div>
+        </Card>
+
+        <Card title="Account balances" eyebrow="Manual balances">
+          <div className="space-y-3">
+            {accounts.map((account) => (
+              <div key={account.id} className="flex items-center justify-between rounded-2xl bg-slate-50 p-4">
+                <div><p className="font-semibold">{account.name}</p><p className="text-xs uppercase tracking-wide text-slate-500">{account.type}</p></div>
+                <p className="text-lg font-semibold tabular-nums">{formatJPY(account.balanceYen)}</p>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </section>
+    </div>
+  );
+}
+
+function BudgetPage({ incomeYen, setIncomeYen, readyToAssignYen, budgetRows, fullBudgetRows, budgetFilter, setBudgetFilter, setAssignment }: { incomeYen: number; setIncomeYen: (value: number) => void; readyToAssignYen: number; budgetRows: ReturnType<typeof buildBudgetRows>; fullBudgetRows: ReturnType<typeof buildBudgetRows>; budgetFilter: "all" | "overspent" | "underfunded" | "funded"; setBudgetFilter: (filter: "all" | "overspent" | "underfunded" | "funded") => void; setAssignment: (categoryId: string, value: number) => void }) {
+  const filters = ["all", "overspent", "underfunded", "funded"] as const;
+  return (
+    <div className="space-y-6">
+      <section className="grid gap-4 xl:grid-cols-3">
+        <MetricCard label="Monthly Income" value={formatJPY(incomeYen)} detail="Editable income for allocation" tone="blue" />
+        <MetricCard label="Ready to Assign" value={formatJPY(readyToAssignYen)} detail="Income minus assigned amounts" tone={readyToAssignYen >= 0 ? "green" : "amber"} />
+        <MetricCard label="Overspent" value={`${fullBudgetRows.filter((row) => row.status === "overspent").length}`} detail="Categories below zero available" tone="amber" />
+      </section>
+
+      <Card title="Monthly assignments" eyebrow="Budget workspace" action={<CurrencyInput label="Income" value={incomeYen} onChange={setIncomeYen} />}>
+        <div className="mb-4 flex flex-wrap gap-2">
+          {filters.map((filter) => <button key={filter} type="button" onClick={() => setBudgetFilter(filter)} className={`rounded-full px-4 py-2 text-sm font-semibold capitalize transition ${budgetFilter === filter ? "bg-[#1C1F3A] text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>{filter} {filter !== "all" ? fullBudgetRows.filter((row) => row.status === filter).length : fullBudgetRows.length}</button>)}
+        </div>
+        <div className="overflow-hidden rounded-2xl border border-slate-100">
+          <table className="w-full border-collapse text-sm">
+            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Category</th><th className="px-4 py-3 text-right">Assigned</th><th className="px-4 py-3 text-right">Activity</th><th className="px-4 py-3 text-right">Available</th></tr></thead>
+            <tbody>{categoryGroups.map((group) => { const rows = budgetRows.filter((row) => row.category.groupId === group.id); if (rows.length === 0) return null; return <BudgetGroup key={group.id} name={group.name} rows={rows} setAssignment={setAssignment} />; })}</tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function TransactionsPage({ uncategorizedCount }: { uncategorizedCount: number }) {
+  return <div className="space-y-6"><Card title="Review queue" eyebrow="Transactions"><div className="mb-4 flex items-center justify-between rounded-2xl bg-amber-50 px-4 py-3 text-amber-800"><span className="text-sm font-medium">{uncategorizedCount} transaction needs categorization</span><CircleAlert className="h-4 w-4" /></div><div className="overflow-hidden rounded-2xl border border-slate-100"><table className="w-full text-sm"><thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Date</th><th className="px-4 py-3">Payee</th><th className="px-4 py-3">Source</th><th className="px-4 py-3 text-right">Amount</th></tr></thead><tbody>{transactions.map((transaction) => <tr key={transaction.id} className={`border-t border-slate-100 ${transaction.categoryId ? "" : "bg-amber-50/40"}`}><td className="px-4 py-3 text-slate-500">{transaction.date}</td><td className="px-4 py-3 font-medium">{transaction.payee}</td><td className="px-4 py-3"><StatusPill tone="slate">{transaction.source}</StatusPill></td><td className="px-4 py-3 text-right font-semibold tabular-nums">{formatJPY(transaction.amountYen)}</td></tr>)}</tbody></table></div></Card></div>;
+}
+
+function DebtPage({ debts, setDebts, totalMonthlyObligationYen, totalOutstandingYen }: { debts: CreditDebt[]; setDebts: (debts: CreditDebt[]) => void; totalMonthlyObligationYen: number; totalOutstandingYen: number }) {
+  const updateDebt = (id: string, changes: Partial<CreditDebt>) => setDebts(debts.map((debt) => debt.id === id ? { ...debt, ...changes } : debt));
+  return <div className="space-y-6"><section className="grid gap-4 xl:grid-cols-3"><MetricCard label="Outstanding Debt" value={formatJPY(totalOutstandingYen)} detail="Active balances" tone="amber" /><MetricCard label="Monthly Obligation" value={formatJPY(totalMonthlyObligationYen)} detail="Minimum planned payments" /><MetricCard label="Active Debt Items" value={`${debts.filter((debt) => !debt.isPaid).length}`} detail="Ribo, bunkatsu, and ikkatsu" tone="blue" /></section><section className="grid gap-6 xl:grid-cols-3">{debts.map((debt) => { const ribo = debt.type === "revolving" ? calculateRiboPayoff({ balanceYen: debt.currentBalanceYen, monthlyPaymentYen: debt.monthlyPaymentYen, annualInterestRate: debt.annualInterestRate }) : null; const bunkatsu = debt.type === "installment" ? calculateBunkatsuRemaining({ monthlyPaymentYen: debt.monthlyPaymentYen, totalInstallments: debt.totalInstallments ?? 0, installmentsPaid: debt.installmentsPaid ?? 0 }) : null; return <Card key={debt.id} title={debt.cardName} eyebrow={debt.description ?? debt.type}><div className="space-y-3"><CurrencyInput label="Balance" value={debt.currentBalanceYen} onChange={(value) => updateDebt(debt.id, { currentBalanceYen: value })} /><CurrencyInput label="Monthly payment" value={debt.monthlyPaymentYen} onChange={(value) => updateDebt(debt.id, { monthlyPaymentYen: value })} /><PercentInput label="APR" value={debt.annualInterestRate} onChange={(value) => updateDebt(debt.id, { annualInterestRate: value })} />{debt.type === "installment" && <NumberInput label="Installments paid" value={debt.installmentsPaid ?? 0} onChange={(value) => updateDebt(debt.id, { installmentsPaid: value })} />}<div className="rounded-2xl bg-slate-50 p-3 text-sm text-slate-600">{ribo && `${ribo.monthsToPayoff} months to payoff · ${formatJPY(ribo.totalInterestYen)} interest`}{bunkatsu && `${bunkatsu.remainingInstallments} installments left · ${formatJPY(bunkatsu.remainingBalanceYen)} remaining`}{debt.type === "lump_sum" && `Expected billing date: ${debt.expectedBillingDate}`}</div></div></Card>; })}</section></div>;
+}
+
+function GoalsPage({ goals, setGoals }: { goals: SavingsGoal[]; setGoals: (goals: SavingsGoal[]) => void }) {
+  const updateGoal = (id: string, changes: Partial<SavingsGoal>) => setGoals(goals.map((goal) => goal.id === id ? { ...goal, ...changes } : goal));
+  return <section className="grid gap-6 xl:grid-cols-2">{goals.map((goal) => { const progress = (goal.currentSavedYen / goal.targetAmountYen) * 100; return <Card key={goal.id} title={`${goal.emoji} ${goal.name}`} eyebrow="Savings target"><ProgressBar value={progress} /><p className="mt-3 text-sm text-slate-500">{formatJPY(goal.currentSavedYen)} of {formatJPY(goal.targetAmountYen)} · target {goal.targetDate}</p><div className="mt-4 grid gap-3 md:grid-cols-3"><CurrencyInput label="Saved" value={goal.currentSavedYen} onChange={(value) => updateGoal(goal.id, { currentSavedYen: value })} /><CurrencyInput label="Target" value={goal.targetAmountYen} onChange={(value) => updateGoal(goal.id, { targetAmountYen: value })} /><CurrencyInput label="Monthly" value={goal.monthlyAllocationYen} onChange={(value) => updateGoal(goal.id, { monthlyAllocationYen: value })} /></div></Card>; })}</section>;
+}
+
+function InvestmentsPage({ investments, setInvestments, weightedReturn }: { investments: Investment[]; setInvestments: (investments: Investment[]) => void; weightedReturn: number }) {
+  const updateInvestment = (id: string, changes: Partial<Investment>) => setInvestments(investments.map((investment) => investment.id === id ? { ...investment, ...changes } : investment));
+  return <div className="space-y-6"><section className="grid gap-4 xl:grid-cols-3"><MetricCard label="Invested Assets" value={formatJPY(investments.reduce((total, investment) => total + investment.currentBalanceYen, 0))} detail="Manual portfolio total" tone="green" /><MetricCard label="Monthly Contributions" value={formatJPY(investments.reduce((total, investment) => total + investment.monthlyContributionYen, 0))} detail="Used by forecast" tone="blue" /><MetricCard label="Expected Return" value={formatPercent(weightedReturn, 1)} detail="Weighted by balance" /></section><section className="grid gap-6 xl:grid-cols-2">{investments.map((investment) => <Card key={investment.id} title={investment.accountName} eyebrow={investment.assetType}><div className="grid gap-3 md:grid-cols-3"><CurrencyInput label="Balance" value={investment.currentBalanceYen} onChange={(value) => updateInvestment(investment.id, { currentBalanceYen: value })} /><CurrencyInput label="Contribution" value={investment.monthlyContributionYen} onChange={(value) => updateInvestment(investment.id, { monthlyContributionYen: value })} /><PercentInput label="Expected return" value={investment.expectedAnnualReturn} onChange={(value) => updateInvestment(investment.id, { expectedAnnualReturn: value })} /></div></Card>)}</section></div>;
+}
+
+function ForecastPage({ inputs, assumptions, setAssumption, deterministic, simulation, setSimulation, drawdown, withdrawal }: { inputs: ForecastInputs; assumptions: ForecastInputs; setAssumption: (field: keyof ForecastInputs, value: string | number | undefined) => void; deterministic: ReturnType<typeof calculateDeterministicForecast>; simulation: MonteCarloResult | null; setSimulation: (result: MonteCarloResult) => void; drawdown: ReturnType<typeof analyzeDrawdowns> | null; withdrawal: ReturnType<typeof simulateWithdrawalSurvival> }) {
+  return <div className="space-y-6"><section className="grid gap-4 xl:grid-cols-4"><MetricCard label="FATFire Age" value={deterministic.estimatedFatfireAge ? deterministic.estimatedFatfireAge.toFixed(1) : "Not reached"} detail={`Current age ${getCurrentAge(inputs).toFixed(1)}`} tone="amber" /><MetricCard label="Target Portfolio" value={formatJPY(deterministic.targetPortfolioYen)} detail="Annual spend ÷ withdrawal rate" /><MetricCard label="Required Monthly" value={formatJPY(deterministic.requiredMonthlyContributionYen)} detail="To reach target age" tone="blue" /><MetricCard label="Retirement Survival" value={formatPercent(withdrawal.survivalProbability)} detail="Withdrawal phase estimate" tone="green" /></section><section className="grid gap-6 xl:grid-cols-[1fr_0.85fr]"><Card title="Portfolio projection" eyebrow="Deterministic forecast"><div className="h-80"><ResponsiveContainer width="100%" height="100%"><AreaChart data={deterministic.timeline}><defs><linearGradient id="forecastFill" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#4A7CFF" stopOpacity={0.32} /><stop offset="95%" stopColor="#4A7CFF" stopOpacity={0.02} /></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" /><XAxis dataKey="age" tickFormatter={(age) => `${age}`} /><YAxis tickFormatter={compactCurrency} width={56} /><Tooltip formatter={(value) => formatJPY(Number(value))} labelFormatter={(label) => `Age ${label}`} /><Area type="monotone" dataKey="optimisticYen" stroke="#4CAF82" fillOpacity={0} strokeDasharray="4 4" /><Area type="monotone" dataKey="baseYen" stroke="#4A7CFF" fill="url(#forecastFill)" strokeWidth={3} /><Area type="monotone" dataKey="pessimisticYen" stroke="#F5A623" fillOpacity={0} strokeDasharray="4 4" /></AreaChart></ResponsiveContainer></div></Card><Card title="Planning assumptions" eyebrow="Editable inputs"><div className="grid gap-3"><TextInput label="Date of birth" value={assumptions.dateOfBirth ?? "1996-02-01"} type="date" onChange={(value) => setAssumption("dateOfBirth", value)} /><NumberInput label="Target FATFire age" value={assumptions.targetRetirementAge} onChange={(value) => setAssumption("targetRetirementAge", value)} /><CurrencyInput label="Annual retirement spend" value={assumptions.targetAnnualRetirementSpendYen} onChange={(value) => setAssumption("targetAnnualRetirementSpendYen", value)} /><CurrencyInput label="Monthly contribution override" value={assumptions.monthlyInvestmentOverrideYen ?? inputs.monthlyContributionYen} onChange={(value) => setAssumption("monthlyInvestmentOverrideYen", value)} /><PercentInput label="Expected annual return" value={assumptions.expectedAnnualReturn} onChange={(value) => setAssumption("expectedAnnualReturn", value)} /><PercentInput label="Return volatility" value={assumptions.returnVolatility} onChange={(value) => setAssumption("returnVolatility", value)} /><PercentInput label="Safe withdrawal rate" value={assumptions.safeWithdrawalRate} onChange={(value) => setAssumption("safeWithdrawalRate", value)} /></div><button type="button" onClick={() => setSimulation(runMonteCarloSimulation(inputs, 1000))} className="mt-4 w-full rounded-2xl bg-[#1C1F3A] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#262a50]">Run Monte Carlo risk analysis</button></Card></section><Card title="Risk analysis" eyebrow="Monte Carlo and drawdown">{simulation && drawdown ? <div className="grid gap-4 xl:grid-cols-4"><RiskStat label="Target success" value={formatPercent(simulation.successProbability)} /><RiskStat label="Median FATFire age" value={simulation.medianFatfireAge?.toFixed(1) ?? "—"} /><RiskStat label="90th percentile drawdown" value={formatPercent(drawdown.p90WorstDrawdown)} /><RiskStat label="Reserve breach" value={formatPercent(simulation.reserveBreachProbability)} /></div> : <p className="text-sm text-slate-500">Run the simulation to evaluate probability of hitting the target age, drawdown exposure, reserve breaches, and sequence-of-returns risk.</p>}</Card></div>;
+}
+
+function ReportsPage({ budgetRows, netWorthYen, incomeYen, totalExpensesYen }: { budgetRows: ReturnType<typeof buildBudgetRows>; netWorthYen: number; incomeYen: number; totalExpensesYen: number }) {
+  const groupData = categoryGroups.map((group) => ({ name: group.name, assigned: budgetRows.filter((row) => row.category.groupId === group.id).reduce((sum, row) => sum + row.assignedYen, 0) }));
+  return <section className="grid gap-6 xl:grid-cols-2"><Card title="Spending by category group" eyebrow="Budget allocation"><div className="h-72"><ResponsiveContainer width="100%" height="100%"><BarChart data={groupData}><CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" /><XAxis dataKey="name" tick={{ fontSize: 11 }} /><YAxis tickFormatter={compactCurrency} width={48} /><Tooltip formatter={(value) => formatJPY(Number(value))} /><Bar dataKey="assigned" fill="#4A7CFF" radius={[8, 8, 0, 0]} /></BarChart></ResponsiveContainer></div></Card><Card title="Income, spending, and net worth" eyebrow="Monthly summary"><div className="h-72"><ResponsiveContainer width="100%" height="100%"><LineChart data={[{ name: "Income", value: incomeYen }, { name: "Spending", value: totalExpensesYen }, { name: "Net worth", value: netWorthYen }]}><CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" /><XAxis dataKey="name" /><YAxis tickFormatter={compactCurrency} width={56} /><Tooltip formatter={(value) => formatJPY(Number(value))} /><Line type="monotone" dataKey="value" stroke="#4CAF82" strokeWidth={3} /></LineChart></ResponsiveContainer></div></Card></section>;
+}
+
+function ImportPage() {
+  return <section className="grid gap-6 xl:grid-cols-3"><WorkflowCard icon={<UploadCloud className="h-5 w-5" />} title="Upload statement or CSV" detail="Supports JPG, PNG, PDF, and CSV files within Supabase free-tier storage limits." /><WorkflowCard icon={<CheckCircle2 className="h-5 w-5" />} title="Review extracted transactions" detail="Japanese dates and integer JPY amounts are normalized before confirmation." /><WorkflowCard icon={<Bot className="h-5 w-5" />} title="Generate monthly insight" detail="Insights use aggregated monthly summaries only and are cached by month." /></section>;
+}
+
+function SettingsPage({ assumptions, setAssumption, incomeYen, setIncomeYen, accounts, setAccounts, investments, setInvestments, debts, setDebts, goals, setGoals }: { assumptions: ForecastInputs; setAssumption: (field: keyof ForecastInputs, value: string | number | undefined) => void; incomeYen: number; setIncomeYen: (value: number) => void; accounts: Account[]; setAccounts: (accounts: Account[]) => void; investments: Investment[]; setInvestments: (investments: Investment[]) => void; debts: CreditDebt[]; setDebts: (debts: CreditDebt[]) => void; goals: SavingsGoal[]; setGoals: (goals: SavingsGoal[]) => void }) {
+  return <div className="space-y-6"><Card title="Core planning defaults" eyebrow="Shared assumptions"><div className="grid gap-3 xl:grid-cols-4"><TextInput label="Date of birth" value={assumptions.dateOfBirth ?? "1996-02-01"} type="date" onChange={(value) => setAssumption("dateOfBirth", value)} /><NumberInput label="Calculated age" value={Math.floor(calculateAgeFromDob(assumptions.dateOfBirth ?? "1996-02-01"))} onChange={() => undefined} disabled /><CurrencyInput label="Monthly income" value={incomeYen} onChange={setIncomeYen} /><NumberInput label="Target FATFire age" value={assumptions.targetRetirementAge} onChange={(value) => setAssumption("targetRetirementAge", value)} /><CurrencyInput label="Annual retirement spend" value={assumptions.targetAnnualRetirementSpendYen} onChange={(value) => setAssumption("targetAnnualRetirementSpendYen", value)} /><PercentInput label="Safe withdrawal rate" value={assumptions.safeWithdrawalRate} onChange={(value) => setAssumption("safeWithdrawalRate", value)} /><PercentInput label="Expected return" value={assumptions.expectedAnnualReturn} onChange={(value) => setAssumption("expectedAnnualReturn", value)} /><PercentInput label="Inflation" value={assumptions.inflationRate} onChange={(value) => setAssumption("inflationRate", value)} /><PercentInput label="Volatility" value={assumptions.returnVolatility} onChange={(value) => setAssumption("returnVolatility", value)} /><NumberInput label="Retirement end age" value={assumptions.retirementEndAge} onChange={(value) => setAssumption("retirementEndAge", value)} /><CurrencyInput label="Reserve threshold" value={assumptions.reserveThresholdYen} onChange={(value) => setAssumption("reserveThresholdYen", value)} /></div></Card><Card title="Editable source values" eyebrow="Manual data entry"><div className="grid gap-6 xl:grid-cols-2"><EditableList title="Accounts">{accounts.map((account) => <CurrencyInput key={account.id} label={account.name} value={account.balanceYen} onChange={(value) => setAccounts(accounts.map((item) => item.id === account.id ? { ...item, balanceYen: value } : item))} />)}</EditableList><EditableList title="Investments">{investments.map((investment) => <CurrencyInput key={investment.id} label={investment.accountName} value={investment.currentBalanceYen} onChange={(value) => setInvestments(investments.map((item) => item.id === investment.id ? { ...item, currentBalanceYen: value } : item))} />)}</EditableList><EditableList title="Debt balances">{debts.map((debt) => <CurrencyInput key={debt.id} label={debt.cardName} value={debt.currentBalanceYen} onChange={(value) => setDebts(debts.map((item) => item.id === debt.id ? { ...item, currentBalanceYen: value } : item))} />)}</EditableList><EditableList title="Goal balances">{goals.map((goal) => <CurrencyInput key={goal.id} label={goal.name} value={goal.currentSavedYen} onChange={(value) => setGoals(goals.map((item) => item.id === goal.id ? { ...item, currentSavedYen: value } : item))} />)}</EditableList></div></Card></div>;
+}
+
+function BudgetGroup({ name, rows, setAssignment }: { name: string; rows: ReturnType<typeof buildBudgetRows>; setAssignment: (categoryId: string, value: number) => void }) {
+  return <><tr className="border-t border-slate-100 bg-slate-50/70"><td colSpan={4} className="px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">{name}</td></tr>{rows.map((row) => { const tone = row.status === "overspent" ? "red" : row.status === "underfunded" ? "amber" : "green"; return <tr key={row.category.id} className="border-t border-slate-100"><td className="px-4 py-3 font-medium">{row.category.name}</td><td className="px-4 py-3 text-right"><input value={row.assignedYen} onChange={(event) => setAssignment(row.category.id, Number(event.target.value) || 0)} type="number" className="w-32 rounded-xl border border-slate-200 bg-white px-3 py-2 text-right tabular-nums outline-none focus:border-[#4A7CFF]" /></td><td className="px-4 py-3 text-right tabular-nums">{formatJPY(row.activityYen)}</td><td className="px-4 py-3 text-right"><StatusPill tone={tone}>{formatJPY(row.availableYen)}</StatusPill></td></tr>; })}</>;
+}
+
+function CurrencyInput({ label, value, onChange, disabled = false }: { label: string; value: number; onChange: (value: number) => void; disabled?: boolean }) {
+  return <Field label={label}><input disabled={disabled} type="number" value={value} onChange={(event) => onChange(Number(event.target.value) || 0)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-right font-medium tabular-nums outline-none focus:border-[#4A7CFF] disabled:bg-slate-100" /></Field>;
+}
+
+function PercentInput({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+  return <Field label={label}><input type="number" step="0.1" value={Math.round(value * 1000) / 10} onChange={(event) => onChange((Number(event.target.value) || 0) / 100)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-right font-medium tabular-nums outline-none focus:border-[#4A7CFF]" /></Field>;
+}
+
+function NumberInput({ label, value, onChange, disabled = false }: { label: string; value: number; onChange: (value: number) => void; disabled?: boolean }) {
+  return <Field label={label}><input disabled={disabled} type="number" value={value} onChange={(event) => onChange(Number(event.target.value) || 0)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-right font-medium tabular-nums outline-none focus:border-[#4A7CFF] disabled:bg-slate-100" /></Field>;
+}
+
+function TextInput({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (value: string) => void; type?: string }) {
+  return <Field label={label}><input type={type} value={value} onChange={(event) => onChange(event.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 font-medium outline-none focus:border-[#4A7CFF]" /></Field>;
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return <label className="block"><span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</span>{children}</label>;
+}
+
+function RiskStat({ label, value }: { label: string; value: string }) {
+  return <div className="rounded-2xl border border-slate-100 bg-white p-3"><p className="text-xs text-slate-500">{label}</p><p className="mt-1 font-semibold tabular-nums">{value}</p></div>;
+}
+
+function ActionButton({ title, detail, tone, onClick }: { title: string; detail: string; tone: "green" | "amber" | "red" | "blue"; onClick: () => void }) {
+  const tones = { green: "border-emerald-200 bg-emerald-50", amber: "border-amber-200 bg-amber-50", red: "border-red-200 bg-red-50", blue: "border-blue-200 bg-blue-50" };
+  return <button type="button" onClick={onClick} className={`rounded-2xl border p-4 text-left transition hover:shadow-sm ${tones[tone]}`}><p className="font-semibold">{title}</p><p className="mt-1 text-sm text-slate-600">{detail}</p></button>;
+}
+
+function WorkflowCard({ icon, title, detail }: { icon: ReactNode; title: string; detail: string }) {
+  return <Card title={title} eyebrow="Workflow step"><div className="grid h-12 w-12 place-items-center rounded-2xl bg-[#1C1F3A] text-white">{icon}</div><p className="mt-4 text-sm leading-6 text-slate-600">{detail}</p></Card>;
+}
+
+function EditableList({ title, children }: { title: string; children: ReactNode }) {
+  return <div className="rounded-2xl bg-slate-50 p-4"><h3 className="mb-3 font-semibold">{title}</h3><div className="grid gap-3">{children}</div></div>;
 }
