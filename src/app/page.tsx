@@ -10,13 +10,12 @@ import {
   BarChart,
   CartesianGrid,
   Line,
-  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
-import { Bot, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Pencil, Plus, SlidersHorizontal, Trash2, UploadCloud, X } from "lucide-react";
+import { Bot, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Pencil, Plus, SlidersHorizontal, Trash2, UploadCloud, X } from "lucide-react";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Card, MetricCard } from "@/components/shared/card";
 import { ProgressBar, StatusPill } from "@/components/shared/progress";
@@ -31,7 +30,6 @@ import {
   incomeEntries,
   investments,
   merchantRules,
-  monthlyIncome,
   nisaContributions,
   savingsGoals,
   transactions,
@@ -39,13 +37,9 @@ import {
 import { buildBudgetRows, calculateReadyToAssignYen, calculateSavingsRate } from "@/domain/budget";
 import { calculateBunkatsuRemaining, calculateDebtSummary, calculateRiboPayoff } from "@/domain/debt";
 import {
-  analyzeDrawdowns,
   calculateAgeFromDob,
   calculateDeterministicForecast,
   getCurrentAge,
-  runMonteCarloSimulation,
-  simulateWithdrawalSurvival,
-  type MonteCarloResult,
 } from "@/domain/forecast";
 import { calculateHypotheticalForecast, defaultHypotheticalForecastInputs, runHypotheticalMonteCarlo, type ForecastMonteCarloResult } from "@/domain/forecasting";
 import { calculateHealthScore, calculateNetWorth } from "@/domain/finance";
@@ -123,7 +117,6 @@ export default function Home() {
   const [goalState, setGoalState] = useState<SavingsGoal[]>(savingsGoals);
   const [investmentState, setInvestmentState] = useState<Investment[]>(investments);
   const [assumptions, setAssumptions] = useState<ForecastInputs>(forecastInputs);
-  const [simulation, setSimulation] = useState<MonteCarloResult | null>(null);
   const [budgetFilter, setBudgetFilter] = useState<"all" | "overspent" | "underfunded" | "funded">("all");
 
   const activeCategories = categoryState.filter((category) => !category.isArchived);
@@ -161,8 +154,6 @@ export default function Home() {
   const netWorth = calculateNetWorth({ accounts: accountState, investments: investmentState, debts: debtState });
   const debtSummary = calculateDebtSummary(debtState);
   const deterministic = calculateDeterministicForecast(effectiveForecastInputs);
-  const withdrawal = simulateWithdrawalSurvival(effectiveForecastInputs, deterministic.targetPortfolioYen, 500);
-  const drawdown = simulation ? analyzeDrawdowns(simulation.maxDrawdowns) : null;
   const uncategorizedCount = ruledTransactions.filter((transaction) => !transaction.categoryId && transaction.date.startsWith(selectedMonth)).length;
   const overspentCount = budgetRows.filter((row) => row.status === "overspent").length;
   const health = calculateHealthScore({
@@ -176,7 +167,6 @@ export default function Home() {
 
   const setAssumption = (field: keyof ForecastInputs, value: string | number | undefined) => {
     setAssumptions((previous) => ({ ...previous, [field]: value }));
-    setSimulation(null);
   };
 
   const openBudgetMonth = (month: string) => {
@@ -250,7 +240,7 @@ export default function Home() {
 
           {activePage === "budget" && <BudgetPage month={selectedMonth} setMonth={openBudgetMonth} incomeEntries={currentIncomeEntries} setIncomeEntries={setIncomeEntryState} readyToAssignYen={readyToAssignYen} budgetRows={visibleBudgetRows} fullBudgetRows={budgetRows} budgetFilter={budgetFilter} setBudgetFilter={setBudgetFilter} categoryList={activeCategories} setCategories={setCategoryState} transactions={transactionState} setTransactions={setTransactionState} budgetNotice={budgetNotice} estimatedAssignments={estimatedAssignments} setAssignment={(categoryId, value) => setAssignmentState((previous) => ({ ...previous, [budgetKey(selectedMonth, categoryId)]: value }))} assignments={assignments} />}
 
-          {activePage === "transactions" && <TransactionsPage month={selectedMonth} setMonth={setSelectedMonth} transactions={ruledTransactions} rawTransactions={transactionState} setTransactions={setTransactionState} accounts={accountState} categories={activeCategories} merchantRules={merchantRuleState} setMerchantRules={setMerchantRuleState} initialAccountIds={transactionAccountFilterIds} initialCategoryIds={transactionCategoryFilterIds} />}
+          {activePage === "transactions" && <TransactionsPage key={`${transactionAccountFilterIds.join(",")}:${transactionCategoryFilterIds.join(",")}`} month={selectedMonth} setMonth={setSelectedMonth} transactions={ruledTransactions} rawTransactions={transactionState} setTransactions={setTransactionState} accounts={accountState} categories={activeCategories} merchantRules={merchantRuleState} setMerchantRules={setMerchantRuleState} initialAccountIds={transactionAccountFilterIds} initialCategoryIds={transactionCategoryFilterIds} />}
           {activePage === "debt" && <DebtPage debts={debtState} setDebts={setDebtState} totalMonthlyObligationYen={debtSummary.totalMonthlyObligationYen} totalOutstandingYen={debtSummary.totalOutstandingYen} />}
           {activePage === "goals" && <GoalsPage month={selectedMonth} goals={goalState} setGoals={setGoalState} assignments={assignments} />}
           {activePage === "investments" && <InvestmentsPage investments={investmentState} setInvestments={setInvestmentState} />}
@@ -308,7 +298,14 @@ function HomePage({ readyToAssignYen, netWorthYen, savingsRate, fatfireAge, heal
 function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToAssignYen, budgetRows, fullBudgetRows, budgetFilter, setBudgetFilter, categoryList, setCategories, transactions, setTransactions, budgetNotice, estimatedAssignments, setAssignment, assignments }: { month: string; setMonth: (month: string) => void; incomeEntries: IncomeEntry[]; setIncomeEntries: Dispatch<SetStateAction<IncomeEntry[]>>; readyToAssignYen: number; budgetRows: ReturnType<typeof buildBudgetRows>; fullBudgetRows: ReturnType<typeof buildBudgetRows>; budgetFilter: "all" | "overspent" | "underfunded" | "funded"; setBudgetFilter: (filter: "all" | "overspent" | "underfunded" | "funded") => void; categoryList: Category[]; setCategories: Dispatch<SetStateAction<Category[]>>; transactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>>; budgetNotice: string | null; estimatedAssignments: Record<string, boolean>; setAssignment: (categoryId: string, value: number) => void; assignments: BudgetAssignment[] }) {
   const filters = ["all", "overspent", "underfunded", "funded"] as const;
   const [incomeCollapsed, setIncomeCollapsed] = useState(false);
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(() => {
+    if (typeof window === "undefined") return {};
+    try {
+      return JSON.parse(localStorage.getItem("fire-save-budget-collapsed-groups") ?? "{}") as Record<string, boolean>;
+    } catch {
+      return {};
+    }
+  });
   const [activityCategoryId, setActivityCategoryId] = useState<string | null>(null);
   const [expenseDraft, setExpenseDraft] = useState({ payee: "", amountYen: 0 });
   const [expenseError, setExpenseError] = useState<string | null>(null);
@@ -316,14 +313,6 @@ function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToA
   const totalIncomeYen = incomeEntries.reduce((total, entry) => total + entry.amountYen, 0);
   const totalActivityYen = fullBudgetRows.reduce((total, row) => total + row.activityYen, 0);
   const overspentByYen = Math.max(0, totalActivityYen - totalIncomeYen);
-
-  useEffect(() => {
-    try {
-      setCollapsedGroups(JSON.parse(localStorage.getItem("fire-save-budget-collapsed-groups") ?? "{}") as Record<string, boolean>);
-    } catch {
-      setCollapsedGroups({});
-    }
-  }, []);
 
   const persistCollapsedGroups = (next: Record<string, boolean>) => {
     setCollapsedGroups(next);
@@ -421,12 +410,6 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
   const [groupBy, setGroupBy] = useState<"none" | "category" | "date">("none");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [inlineMessage, setInlineMessage] = useState<string | null>(null);
-  useEffect(() => {
-    if (initialAccountIds.length > 0) setFilters((previous) => ({ ...previous, accountIds: initialAccountIds }));
-  }, [initialAccountIds]);
-  useEffect(() => {
-    if (initialCategoryIds.length > 0) setFilters((previous) => ({ ...previous, categoryIds: initialCategoryIds }));
-  }, [initialCategoryIds]);
   const monthTransactions = transactions.filter((transaction) => transaction.date.startsWith(month));
   const filteredTransactions = useMemo(() => {
     const search = normalizeMerchant(filters.search);
@@ -607,7 +590,8 @@ function BudgetGroup({ name, rows, isCollapsed, toggleCollapsed, addCategory, de
 }
 
 function CurrencyInput({ label, value, onChange, disabled = false }: { label: string; value: number; onChange: (value: number) => void; disabled?: boolean }) {
-  return <Field label={label}><input disabled={disabled} type="number" value={value} onChange={(event) => onChange(Number(event.target.value) || 0)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-right font-medium tabular-nums outline-none focus:border-[#4A7CFF] disabled:bg-slate-100" /></Field>;
+  const parseCurrency = (raw: string) => Number(raw.replace(/[^\d-]/g, "")) || 0;
+  return <Field label={label}><input disabled={disabled} type="text" inputMode="numeric" value={formatJPY(value)} onChange={(event) => onChange(parseCurrency(event.target.value))} onBlur={(event) => onChange(parseCurrency(event.target.value))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-right font-medium tabular-nums outline-none focus:border-[#4A7CFF] disabled:bg-slate-100" /></Field>;
 }
 
 function PercentInput({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
@@ -640,10 +624,6 @@ function FragmentGroup({ label, count, subtotal, isCollapsed, toggle, children }
 
 function ChartReportCard({ title, hasEnoughData, isLoading = false, children }: { title: string; hasEnoughData: boolean; isLoading?: boolean; children: ReactNode }) {
   return <Card title={title} eyebrow="Last 6 months"><div className="h-80">{isLoading ? <div className="h-full animate-pulse rounded-3xl bg-slate-100" /> : !hasEnoughData ? <div className="grid h-full place-items-center rounded-3xl bg-slate-50 p-6 text-center text-sm text-slate-500"><div><p className="font-semibold text-slate-700">Not enough monthly data yet.</p><p className="mt-1">At least two months of data are required for this chart.</p></div></div> : children}</div></Card>;
-}
-
-function RiskStat({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-2xl border border-slate-100 bg-white p-3"><p className="text-xs text-slate-500">{label}</p><p className="mt-1 font-semibold tabular-nums">{value}</p></div>;
 }
 
 function ActionButton({ title, detail, tone, onClick }: { title: string; detail: string; tone: "green" | "amber" | "red" | "blue"; onClick: () => void }) {
