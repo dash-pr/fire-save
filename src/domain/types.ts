@@ -87,6 +87,7 @@ export type CreditDebt = {
 
 export type SavingsGoal = {
   id: string;
+  categoryId?: string;
   emoji: string;
   name: string;
   currentSavedYen: Yen;

@@ -83,8 +83,8 @@ export const transactions: Transaction[] = [
 ];
 
 export const savingsGoals: SavingsGoal[] = [
-  { id: "goal-gaming-pc", emoji: "🖥️", name: "Gaming PC", currentSavedYen: 84000, targetAmountYen: 200000, monthlyAllocationYen: 35000, targetDate: "2026-09-30" },
-  { id: "goal-europe", emoji: "✈️", name: "Europe Trip", currentSavedYen: 155000, targetAmountYen: 500000, monthlyAllocationYen: 65000, targetDate: "2027-03-31" },
+  { id: "goal-gaming-pc", categoryId: "cat-gaming-pc", emoji: "🖥️", name: "Gaming PC", currentSavedYen: 84000, targetAmountYen: 200000, monthlyAllocationYen: 35000, targetDate: "2026-09-30" },
+  { id: "goal-europe", categoryId: "cat-europe", emoji: "✈️", name: "Europe Trip", currentSavedYen: 155000, targetAmountYen: 500000, monthlyAllocationYen: 65000, targetDate: "2027-03-31" },
 ];
 
 export const debts: CreditDebt[] = [
