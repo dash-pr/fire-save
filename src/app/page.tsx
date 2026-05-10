@@ -30,6 +30,7 @@ import {
   forecastInputs,
   incomeEntries,
   investments,
+  merchantRules,
   monthlyIncome,
   nisaContributions,
   savingsGoals,
@@ -47,7 +48,7 @@ import {
   type MonteCarloResult,
 } from "@/domain/forecast";
 import { calculateHealthScore, calculateNetWorth } from "@/domain/finance";
-import type { Account, BudgetAssignment, Category, CreditDebt, ForecastInputs, IncomeEntry, Investment, SavingsGoal, Transaction } from "@/domain/types";
+import type { Account, BudgetAssignment, Category, CreditDebt, ForecastInputs, IncomeEntry, Investment, MerchantRule, SavingsGoal, Transaction } from "@/domain/types";
 import { formatJPY, formatMonth, formatPercent } from "@/lib/format";
 
 type PageKey = "home" | "budget" | "transactions" | "debt" | "goals" | "investments" | "forecast" | "reports" | "import" | "settings";
@@ -86,6 +87,21 @@ function isFixedPriorityCategory(category: Category): boolean {
   return ["grp-fixed", "grp-debt", "grp-investments", "grp-goals"].includes(category.groupId);
 }
 
+function normalizeMerchant(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9ぁ-んァ-ン一-龥]/g, "");
+}
+
+function matchesMerchantRule(payee: string, rule: MerchantRule): boolean {
+  const merchant = normalizeMerchant(payee);
+  const pattern = normalizeMerchant(rule.pattern);
+  return rule.fuzzyMatch ? merchant.includes(pattern) : merchant === pattern;
+}
+
+function weekOfMonth(date: string): string {
+  const day = new Date(`${date}T00:00:00`).getDate();
+  return `Week ${Math.ceil(day / 7)}`;
+}
+
 export default function Home() {
   const [activePage, setActivePage] = useState<PageKey>("home");
   const [selectedMonth, setSelectedMonth] = useState(currentMonth);
@@ -93,6 +109,7 @@ export default function Home() {
   const [incomeEntryState, setIncomeEntryState] = useState<IncomeEntry[]>(incomeEntries);
   const [categoryState, setCategoryState] = useState<Category[]>(categories);
   const [transactionState, setTransactionState] = useState<Transaction[]>(transactions);
+  const [merchantRuleState, setMerchantRuleState] = useState<MerchantRule[]>(merchantRules);
   const [assignmentState, setAssignmentState] = useState<Record<string, number>>(
     Object.fromEntries(budgetAssignments.map((assignment) => [budgetKey(assignment.month, assignment.categoryId), assignment.assignedYen])),
   );
@@ -126,6 +143,14 @@ export default function Home() {
     () => buildBudgetRows({ categories: activeCategories, assignments, transactions: transactionState, month: selectedMonth }),
     [activeCategories, assignments, selectedMonth, transactionState],
   );
+  const ruledTransactions = useMemo(
+    () => transactionState.map((transaction) => {
+      if (transaction.categoryId) return transaction;
+      const rule = merchantRuleState.find((item) => matchesMerchantRule(transaction.payee, item));
+      return rule ? { ...transaction, categoryId: rule.categoryId } : transaction;
+    }),
+    [merchantRuleState, transactionState],
+  );
   const visibleBudgetRows = budgetRows.filter((row) => budgetFilter === "all" || row.status === budgetFilter);
   const readyToAssignYen = calculateReadyToAssignYen(incomeYen, assignments);
   const totalExpensesYen = transactionState.filter((transaction) => transaction.type === "debit" && transaction.date.startsWith(selectedMonth)).reduce((total, transaction) => total + transaction.amountYen, 0);
@@ -135,7 +160,7 @@ export default function Home() {
   const deterministic = calculateDeterministicForecast(effectiveForecastInputs);
   const withdrawal = simulateWithdrawalSurvival(effectiveForecastInputs, deterministic.targetPortfolioYen, 500);
   const drawdown = simulation ? analyzeDrawdowns(simulation.maxDrawdowns) : null;
-  const uncategorizedCount = transactionState.filter((transaction) => !transaction.categoryId && transaction.date.startsWith(selectedMonth)).length;
+  const uncategorizedCount = ruledTransactions.filter((transaction) => !transaction.categoryId && transaction.date.startsWith(selectedMonth)).length;
   const overspentCount = budgetRows.filter((row) => row.status === "overspent").length;
   const health = calculateHealthScore({
     savingsRate,
@@ -222,14 +247,14 @@ export default function Home() {
 
           {activePage === "budget" && <BudgetPage month={selectedMonth} setMonth={openBudgetMonth} incomeEntries={currentIncomeEntries} setIncomeEntries={setIncomeEntryState} readyToAssignYen={readyToAssignYen} budgetRows={visibleBudgetRows} fullBudgetRows={budgetRows} budgetFilter={budgetFilter} setBudgetFilter={setBudgetFilter} categoryList={activeCategories} setCategories={setCategoryState} transactions={transactionState} setTransactions={setTransactionState} budgetNotice={budgetNotice} estimatedAssignments={estimatedAssignments} setAssignment={(categoryId, value) => setAssignmentState((previous) => ({ ...previous, [budgetKey(selectedMonth, categoryId)]: value }))} assignments={assignments} />}
 
-          {activePage === "transactions" && <TransactionsPage uncategorizedCount={uncategorizedCount} />}
+          {activePage === "transactions" && <TransactionsPage month={selectedMonth} setMonth={setSelectedMonth} transactions={ruledTransactions} rawTransactions={transactionState} setTransactions={setTransactionState} accounts={accountState} categories={activeCategories} merchantRules={merchantRuleState} setMerchantRules={setMerchantRuleState} />}
           {activePage === "debt" && <DebtPage debts={debtState} setDebts={setDebtState} totalMonthlyObligationYen={debtSummary.totalMonthlyObligationYen} totalOutstandingYen={debtSummary.totalOutstandingYen} />}
           {activePage === "goals" && <GoalsPage goals={goalState} setGoals={setGoalState} />}
           {activePage === "investments" && <InvestmentsPage investments={investmentState} setInvestments={setInvestmentState} />}
           {activePage === "forecast" && <ForecastPage inputs={effectiveForecastInputs} assumptions={assumptions} setAssumption={setAssumption} deterministic={deterministic} simulation={simulation} setSimulation={setSimulation} drawdown={drawdown} withdrawal={withdrawal} />}
           {activePage === "reports" && <ReportsPage budgetRows={budgetRows} netWorthYen={netWorth.netWorthYen} incomeYen={incomeYen} totalExpensesYen={totalExpensesYen} />}
           {activePage === "import" && <ImportPage />}
-          {activePage === "settings" && <SettingsPage assumptions={assumptions} setAssumption={setAssumption} accounts={accountState} setAccounts={setAccountState} investments={investmentState} setInvestments={setInvestmentState} debts={debtState} setDebts={setDebtState} goals={goalState} setGoals={setGoalState} />}
+          {activePage === "settings" && <SettingsPage assumptions={assumptions} setAssumption={setAssumption} accounts={accountState} setAccounts={setAccountState} investments={investmentState} setInvestments={setInvestmentState} debts={debtState} setDebts={setDebtState} goals={goalState} setGoals={setGoalState} categories={activeCategories} merchantRules={merchantRuleState} setMerchantRules={setMerchantRuleState} />}
         </main>
       </div>
     </div>
@@ -381,8 +406,83 @@ function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToA
   );
 }
 
-function TransactionsPage({ uncategorizedCount }: { uncategorizedCount: number }) {
-  return <div className="space-y-6"><Card title="Review queue" eyebrow="Transactions"><div className="mb-4 flex items-center justify-between rounded-2xl bg-amber-50 px-4 py-3 text-amber-800"><span className="text-sm font-medium">{uncategorizedCount} transaction needs categorization</span><CircleAlert className="h-4 w-4" /></div><div className="overflow-hidden rounded-2xl border border-slate-100"><table className="w-full text-sm"><thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Date</th><th className="px-4 py-3">Payee</th><th className="px-4 py-3">Source</th><th className="px-4 py-3 text-right">Amount</th></tr></thead><tbody>{transactions.map((transaction) => <tr key={transaction.id} className={`border-t border-slate-100 ${transaction.categoryId ? "" : "bg-amber-50/40"}`}><td className="px-4 py-3 text-slate-500">{transaction.date}</td><td className="px-4 py-3 font-medium">{transaction.payee}</td><td className="px-4 py-3"><StatusPill tone="slate">{transaction.source}</StatusPill></td><td className="px-4 py-3 text-right font-semibold tabular-nums">{formatJPY(transaction.amountYen)}</td></tr>)}</tbody></table></div></Card></div>;
+type TransactionFilterState = {
+  search: string;
+  accountIds: string[];
+  categoryIds: string[];
+  type: "all" | "debit" | "credit";
+};
+
+function TransactionsPage({ month, setMonth, transactions, rawTransactions, setTransactions, accounts, categories, merchantRules, setMerchantRules }: { month: string; setMonth: (month: string) => void; transactions: Transaction[]; rawTransactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>>; accounts: Account[]; categories: Category[]; merchantRules: MerchantRule[]; setMerchantRules: Dispatch<SetStateAction<MerchantRule[]>> }) {
+  const [filters, setFilters] = useState<TransactionFilterState>({ search: "", accountIds: [], categoryIds: [], type: "all" });
+  const [groupBy, setGroupBy] = useState<"none" | "category" | "date">("none");
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [inlineMessage, setInlineMessage] = useState<string | null>(null);
+  const monthTransactions = transactions.filter((transaction) => transaction.date.startsWith(month));
+  const filteredTransactions = useMemo(() => {
+    const search = normalizeMerchant(filters.search);
+    return monthTransactions.filter((transaction) => {
+      const matchesSearch = !search || normalizeMerchant(`${transaction.payee} ${transaction.memo ?? ""}`).includes(search);
+      const matchesAccount = filters.accountIds.length === 0 || filters.accountIds.includes(transaction.accountId);
+      const matchesCategory = filters.categoryIds.length === 0 || (transaction.categoryId ? filters.categoryIds.includes(transaction.categoryId) : filters.categoryIds.includes("uncategorized"));
+      const matchesType = filters.type === "all" || transaction.type === filters.type;
+      return matchesSearch && matchesAccount && matchesCategory && matchesType;
+    });
+  }, [filters, monthTransactions]);
+  const stats = {
+    totalIn: filteredTransactions.filter((transaction) => transaction.type === "credit").reduce((total, transaction) => total + transaction.amountYen, 0),
+    totalOut: filteredTransactions.filter((transaction) => transaction.type === "debit").reduce((total, transaction) => total + transaction.amountYen, 0),
+    count: filteredTransactions.length,
+    uncategorized: filteredTransactions.filter((transaction) => !transaction.categoryId).length,
+  };
+  const grouped = useMemo(() => {
+    if (groupBy === "none") return [{ key: "all", label: "All Transactions", rows: filteredTransactions }];
+    const groups = new Map<string, Transaction[]>();
+    filteredTransactions.forEach((transaction) => {
+      const key = groupBy === "category" ? transaction.categoryId ?? "uncategorized" : weekOfMonth(transaction.date);
+      groups.set(key, [...(groups.get(key) ?? []), transaction]);
+    });
+    return Array.from(groups.entries()).map(([key, rows]) => ({
+      key,
+      label: groupBy === "category" ? categories.find((category) => category.id === key)?.name ?? "Uncategorized" : key,
+      rows,
+    }));
+  }, [categories, filteredTransactions, groupBy]);
+
+  const toggleFilterValue = (field: "accountIds" | "categoryIds", value: string) => setFilters((previous) => ({
+    ...previous,
+    [field]: previous[field].includes(value) ? previous[field].filter((item) => item !== value) : [...previous[field], value],
+  }));
+
+  const updateCategory = (transaction: Transaction, categoryId: string) => {
+    const previousMerchantCategory = rawTransactions.find((item) => item.id !== transaction.id && item.categoryId && normalizeMerchant(item.payee) === normalizeMerchant(transaction.payee))?.categoryId;
+    const finalCategoryId = previousMerchantCategory ?? categoryId;
+    setTransactions((previous) => previous.map((item) => item.id === transaction.id ? { ...item, categoryId: finalCategoryId } : item));
+    if (previousMerchantCategory && previousMerchantCategory !== categoryId) {
+      const categoryName = categories.find((category) => category.id === previousMerchantCategory)?.name ?? "previous category";
+      setInlineMessage(`${transaction.payee} was previously categorized as ${categoryName}; previous category auto-applied.`);
+    } else {
+      setInlineMessage(null);
+    }
+  };
+
+  const addMerchantRule = (transaction: Transaction) => {
+    if (!transaction.categoryId) {
+      setInlineMessage("Choose a category before creating a merchant rule.");
+      return;
+    }
+    const exists = merchantRules.some((rule) => normalizeMerchant(rule.pattern) === normalizeMerchant(transaction.payee));
+    if (exists) {
+      setInlineMessage("A merchant rule already exists for this payee.");
+      return;
+    }
+    const rule: MerchantRule = { id: makeLocalId("rule"), pattern: transaction.payee, categoryId: transaction.categoryId, fuzzyMatch: true, createdAt: new Date().toISOString() };
+    setMerchantRules((previous) => [...previous, rule]);
+    setTransactions((previous) => previous.map((item) => matchesMerchantRule(item.payee, rule) ? { ...item, categoryId: rule.categoryId } : item));
+    setInlineMessage(`Always categorize ${transaction.payee} rule created.`);
+  };
+
+  return <div className="space-y-6"><MonthNavigator month={month} onPrevious={() => setMonth(shiftMonth(month, -1))} onNext={() => setMonth(shiftMonth(month, 1))} /><section className="grid gap-4 xl:grid-cols-5"><MetricCard label="Total In" value={formatJPY(stats.totalIn)} detail="Filtered credits" tone="blue" /><MetricCard label="Total Out" value={formatJPY(stats.totalOut)} detail="Filtered debits" tone="amber" /><MetricCard label="Net" value={formatJPY(stats.totalIn - stats.totalOut)} detail="Income minus outflow" tone={stats.totalIn - stats.totalOut >= 0 ? "green" : "amber"} /><MetricCard label="Transactions" value={`${stats.count}`} detail="Filtered count" /><MetricCard label="Uncategorized" value={`${stats.uncategorized}`} detail="Needs category" tone={stats.uncategorized > 0 ? "amber" : "green"} /></section><Card title="Filter transactions" eyebrow="Monthly review"><div className="grid gap-4 xl:grid-cols-[1.2fr_1fr_1fr_0.8fr_0.8fr]"><TextInput label="Search merchant or memo" value={filters.search} onChange={(value) => setFilters((previous) => ({ ...previous, search: value }))} /><FilterChecklist title="Accounts">{accounts.map((account) => <label key={account.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={filters.accountIds.includes(account.id)} onChange={() => toggleFilterValue("accountIds", account.id)} />{account.name}</label>)}</FilterChecklist><FilterChecklist title="Categories">{categories.map((category) => <label key={category.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={filters.categoryIds.includes(category.id)} onChange={() => toggleFilterValue("categoryIds", category.id)} />{category.name}</label>)}<label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={filters.categoryIds.includes("uncategorized")} onChange={() => toggleFilterValue("categoryIds", "uncategorized")} />Uncategorized</label></FilterChecklist><SelectField label="Type" value={filters.type} onChange={(value) => setFilters((previous) => ({ ...previous, type: value as TransactionFilterState["type"] }))}><option value="all">All</option><option value="debit">Debit only</option><option value="credit">Credit only</option></SelectField><SelectField label="Group by" value={groupBy} onChange={(value) => setGroupBy(value as typeof groupBy)}><option value="none">None</option><option value="category">By Category</option><option value="date">By Date</option></SelectField></div>{inlineMessage && <p className="mt-3 rounded-2xl bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-800">{inlineMessage}</p>}</Card><Card title="Transactions" eyebrow="Categorize and review"><div className="overflow-hidden rounded-2xl border border-slate-100"><table className="w-full text-sm"><thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Date</th><th className="px-4 py-3">Payee</th><th className="px-4 py-3">Account</th><th className="px-4 py-3">Category</th><th className="px-4 py-3">Rule</th><th className="px-4 py-3 text-right">Amount</th></tr></thead><tbody>{grouped.map((group) => { const subtotal = group.rows.reduce((total, transaction) => total + (transaction.type === "debit" ? -transaction.amountYen : transaction.amountYen), 0); const isCollapsed = collapsed[group.key] ?? false; return <FragmentGroup key={group.key} label={group.label} count={group.rows.length} subtotal={subtotal} isCollapsed={isCollapsed} toggle={() => setCollapsed((previous) => ({ ...previous, [group.key]: !isCollapsed }))}>{group.rows.map((transaction) => <tr key={transaction.id} className={`border-t border-slate-100 ${transaction.categoryId ? "" : "bg-amber-50/40"}`}><td className="px-4 py-3 text-slate-500">{transaction.date}</td><td className="px-4 py-3 font-medium"><div>{transaction.payee}</div>{transaction.memo && <div className="text-xs text-slate-500">{transaction.memo}</div>}</td><td className="px-4 py-3 text-slate-600">{accounts.find((account) => account.id === transaction.accountId)?.name ?? "Unknown"}</td><td className="px-4 py-3"><select value={transaction.categoryId ?? ""} onChange={(event) => updateCategory(transaction, event.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 outline-none focus:border-[#4A7CFF]"><option value="">Uncategorized</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></td><td className="px-4 py-3"><button type="button" onClick={() => addMerchantRule(transaction)} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-200">Always categorize</button></td><td className={`px-4 py-3 text-right font-semibold tabular-nums ${transaction.type === "credit" ? "text-emerald-700" : "text-slate-900"}`}>{transaction.type === "credit" ? "+" : "-"}{formatJPY(transaction.amountYen)}</td></tr>)}</FragmentGroup>; })}</tbody></table></div></Card></div>;
 }
 
 function DebtPage({ debts, setDebts, totalMonthlyObligationYen, totalOutstandingYen }: { debts: CreditDebt[]; setDebts: (debts: CreditDebt[]) => void; totalMonthlyObligationYen: number; totalOutstandingYen: number }) {
@@ -413,8 +513,9 @@ function ImportPage() {
   return <section className="grid gap-6 xl:grid-cols-3"><WorkflowCard icon={<UploadCloud className="h-5 w-5" />} title="Upload statement or CSV" detail="Supports JPG, PNG, PDF, and CSV files within Supabase free-tier storage limits." /><WorkflowCard icon={<CheckCircle2 className="h-5 w-5" />} title="Review extracted transactions" detail="Japanese dates and integer JPY amounts are normalized before confirmation." /><WorkflowCard icon={<Bot className="h-5 w-5" />} title="Generate monthly insight" detail="Insights use aggregated monthly summaries only and are cached by month." /></section>;
 }
 
-function SettingsPage({ assumptions, setAssumption, accounts, setAccounts, investments, setInvestments, debts, setDebts, goals, setGoals }: { assumptions: ForecastInputs; setAssumption: (field: keyof ForecastInputs, value: string | number | undefined) => void; accounts: Account[]; setAccounts: (accounts: Account[]) => void; investments: Investment[]; setInvestments: (investments: Investment[]) => void; debts: CreditDebt[]; setDebts: (debts: CreditDebt[]) => void; goals: SavingsGoal[]; setGoals: (goals: SavingsGoal[]) => void }) {
-  return <div className="space-y-6"><Card title="Core planning defaults" eyebrow="Shared assumptions"><div className="grid gap-3 xl:grid-cols-4"><TextInput label="Date of birth" value={assumptions.dateOfBirth ?? "1996-02-01"} type="date" onChange={(value) => setAssumption("dateOfBirth", value)} /><NumberInput label="Calculated age" value={Math.floor(calculateAgeFromDob(assumptions.dateOfBirth ?? "1996-02-01"))} onChange={() => undefined} disabled /><NumberInput label="Target FATFire age" value={assumptions.targetRetirementAge} onChange={(value) => setAssumption("targetRetirementAge", value)} /><CurrencyInput label="Annual retirement spend" value={assumptions.targetAnnualRetirementSpendYen} onChange={(value) => setAssumption("targetAnnualRetirementSpendYen", value)} /><PercentInput label="Safe withdrawal rate" value={assumptions.safeWithdrawalRate} onChange={(value) => setAssumption("safeWithdrawalRate", value)} /><PercentInput label="Expected return" value={assumptions.expectedAnnualReturn} onChange={(value) => setAssumption("expectedAnnualReturn", value)} /><PercentInput label="Inflation" value={assumptions.inflationRate} onChange={(value) => setAssumption("inflationRate", value)} /><PercentInput label="Volatility" value={assumptions.returnVolatility} onChange={(value) => setAssumption("returnVolatility", value)} /><NumberInput label="Retirement end age" value={assumptions.retirementEndAge} onChange={(value) => setAssumption("retirementEndAge", value)} /><CurrencyInput label="Reserve threshold" value={assumptions.reserveThresholdYen} onChange={(value) => setAssumption("reserveThresholdYen", value)} /></div></Card><Card title="Editable source values" eyebrow="Manual data entry"><div className="grid gap-6 xl:grid-cols-2"><EditableList title="Accounts">{accounts.map((account) => <CurrencyInput key={account.id} label={account.name} value={account.balanceYen} onChange={(value) => setAccounts(accounts.map((item) => item.id === account.id ? { ...item, balanceYen: value } : item))} />)}</EditableList><EditableList title="Investments">{investments.map((investment) => <CurrencyInput key={investment.id} label={investment.accountName} value={investment.currentBalanceYen} onChange={(value) => setInvestments(investments.map((item) => item.id === investment.id ? { ...item, currentBalanceYen: value } : item))} />)}</EditableList><EditableList title="Debt balances">{debts.map((debt) => <CurrencyInput key={debt.id} label={debt.cardName} value={debt.currentBalanceYen} onChange={(value) => setDebts(debts.map((item) => item.id === debt.id ? { ...item, currentBalanceYen: value } : item))} />)}</EditableList><EditableList title="Goal balances">{goals.map((goal) => <CurrencyInput key={goal.id} label={goal.name} value={goal.currentSavedYen} onChange={(value) => setGoals(goals.map((item) => item.id === goal.id ? { ...item, currentSavedYen: value } : item))} />)}</EditableList></div></Card></div>;
+function SettingsPage({ assumptions, setAssumption, accounts, setAccounts, investments, setInvestments, debts, setDebts, goals, setGoals, categories, merchantRules, setMerchantRules }: { assumptions: ForecastInputs; setAssumption: (field: keyof ForecastInputs, value: string | number | undefined) => void; accounts: Account[]; setAccounts: (accounts: Account[]) => void; investments: Investment[]; setInvestments: (investments: Investment[]) => void; debts: CreditDebt[]; setDebts: (debts: CreditDebt[]) => void; goals: SavingsGoal[]; setGoals: (goals: SavingsGoal[]) => void; categories: Category[]; merchantRules: MerchantRule[]; setMerchantRules: Dispatch<SetStateAction<MerchantRule[]>> }) {
+  const updateRule = (id: string, changes: Partial<MerchantRule>) => setMerchantRules((previous) => previous.map((rule) => rule.id === id ? { ...rule, ...changes } : rule));
+  return <div className="space-y-6"><Card title="Core planning defaults" eyebrow="Shared assumptions"><div className="grid gap-3 xl:grid-cols-4"><TextInput label="Date of birth" value={assumptions.dateOfBirth ?? "1996-02-01"} type="date" onChange={(value) => setAssumption("dateOfBirth", value)} /><NumberInput label="Calculated age" value={Math.floor(calculateAgeFromDob(assumptions.dateOfBirth ?? "1996-02-01"))} onChange={() => undefined} disabled /><NumberInput label="Target FATFire age" value={assumptions.targetRetirementAge} onChange={(value) => setAssumption("targetRetirementAge", value)} /><CurrencyInput label="Annual retirement spend" value={assumptions.targetAnnualRetirementSpendYen} onChange={(value) => setAssumption("targetAnnualRetirementSpendYen", value)} /><PercentInput label="Safe withdrawal rate" value={assumptions.safeWithdrawalRate} onChange={(value) => setAssumption("safeWithdrawalRate", value)} /><PercentInput label="Expected return" value={assumptions.expectedAnnualReturn} onChange={(value) => setAssumption("expectedAnnualReturn", value)} /><PercentInput label="Inflation" value={assumptions.inflationRate} onChange={(value) => setAssumption("inflationRate", value)} /><PercentInput label="Volatility" value={assumptions.returnVolatility} onChange={(value) => setAssumption("returnVolatility", value)} /><NumberInput label="Retirement end age" value={assumptions.retirementEndAge} onChange={(value) => setAssumption("retirementEndAge", value)} /><CurrencyInput label="Reserve threshold" value={assumptions.reserveThresholdYen} onChange={(value) => setAssumption("reserveThresholdYen", value)} /></div></Card><Card title="Merchant Rules" eyebrow="Intelligent categorization"><div className="overflow-hidden rounded-2xl border border-slate-100"><table className="w-full text-sm"><thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Pattern</th><th className="px-4 py-3">Category</th><th className="px-4 py-3">Fuzzy</th><th className="px-4 py-3">Created</th><th className="px-4 py-3 text-right">Action</th></tr></thead><tbody>{merchantRules.length === 0 ? <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-500">No merchant rules yet. Create rules from the Transactions screen.</td></tr> : merchantRules.map((rule) => <tr key={rule.id} className="border-t border-slate-100"><td className="px-4 py-3"><input value={rule.pattern} onChange={(event) => updateRule(rule.id, { pattern: event.target.value })} className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-[#4A7CFF]" /></td><td className="px-4 py-3"><select value={rule.categoryId} onChange={(event) => updateRule(rule.id, { categoryId: event.target.value })} className="rounded-xl border border-slate-200 bg-white px-3 py-2 outline-none focus:border-[#4A7CFF]">{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></td><td className="px-4 py-3"><input type="checkbox" checked={rule.fuzzyMatch} onChange={(event) => updateRule(rule.id, { fuzzyMatch: event.target.checked })} /></td><td className="px-4 py-3 text-slate-500">{rule.createdAt ? rule.createdAt.slice(0, 10) : "—"}</td><td className="px-4 py-3 text-right"><button type="button" onClick={() => setMerchantRules((previous) => previous.filter((item) => item.id !== rule.id))} className="rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700">Delete</button></td></tr>)}</tbody></table></div></Card><Card title="Editable source values" eyebrow="Manual data entry"><div className="grid gap-6 xl:grid-cols-2"><EditableList title="Accounts">{accounts.map((account) => <CurrencyInput key={account.id} label={account.name} value={account.balanceYen} onChange={(value) => setAccounts(accounts.map((item) => item.id === account.id ? { ...item, balanceYen: value } : item))} />)}</EditableList><EditableList title="Investments">{investments.map((investment) => <CurrencyInput key={investment.id} label={investment.accountName} value={investment.currentBalanceYen} onChange={(value) => setInvestments(investments.map((item) => item.id === investment.id ? { ...item, currentBalanceYen: value } : item))} />)}</EditableList><EditableList title="Debt balances">{debts.map((debt) => <CurrencyInput key={debt.id} label={debt.cardName} value={debt.currentBalanceYen} onChange={(value) => setDebts(debts.map((item) => item.id === debt.id ? { ...item, currentBalanceYen: value } : item))} />)}</EditableList><EditableList title="Goal balances">{goals.map((goal) => <CurrencyInput key={goal.id} label={goal.name} value={goal.currentSavedYen} onChange={(value) => setGoals(goals.map((item) => item.id === goal.id ? { ...item, currentSavedYen: value } : item))} />)}</EditableList></div></Card></div>;
 }
 
 function MonthNavigator({ month, onPrevious, onNext }: { month: string; onPrevious: () => void; onNext: () => void }) {
@@ -446,6 +547,18 @@ function TextInput({ label, value, onChange, type = "text" }: { label: string; v
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return <label className="block"><span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</span>{children}</label>;
+}
+
+function SelectField({ label, value, onChange, children }: { label: string; value: string; onChange: (value: string) => void; children: ReactNode }) {
+  return <Field label={label}><select value={value} onChange={(event) => onChange(event.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 font-medium outline-none focus:border-[#4A7CFF]">{children}</select></Field>;
+}
+
+function FilterChecklist({ title, children }: { title: string; children: ReactNode }) {
+  return <div><p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</p><div className="max-h-32 space-y-1 overflow-auto rounded-xl border border-slate-200 bg-white p-3">{children}</div></div>;
+}
+
+function FragmentGroup({ label, count, subtotal, isCollapsed, toggle, children }: { label: string; count: number; subtotal: number; isCollapsed: boolean; toggle: () => void; children: ReactNode }) {
+  return <><tr onClick={toggle} className="cursor-pointer border-t border-slate-100 bg-slate-50/80"><td colSpan={6} className="px-4 py-3"><div className="flex items-center justify-between"><span className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500"><ChevronDown className={`h-4 w-4 transition ${isCollapsed ? "-rotate-90" : ""}`} />{label} · {count} items</span><span className="font-semibold tabular-nums text-slate-600">{formatJPY(subtotal)}</span></div></td></tr>{!isCollapsed && children}</>;
 }
 
 function RiskStat({ label, value }: { label: string; value: string }) {
