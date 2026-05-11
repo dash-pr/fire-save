@@ -107,6 +107,16 @@ export type GoalBalanceUpdate = {
   updatedAt?: string;
 };
 
+export type GoalMutationResponse = {
+  goal: SavingsGoal;
+};
+
+export type GoalDeleteResponse = {
+  deleted: boolean;
+  movedTransactions: number;
+  removedCategoryId?: string | null;
+};
+
 export type Investment = {
   id: string;
   accountName: string;
