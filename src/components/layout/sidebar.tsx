@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import type { Account, Investment } from "@/domain/types";
 import { formatJPY } from "@/lib/format";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 const nav = [
   { key: "home", label: "Home", icon: Home },
@@ -72,7 +73,8 @@ export function Sidebar({
   };
 
   return (
-    <aside className="hidden min-h-screen w-64 shrink-0 flex-col bg-[#1C1F3A] p-5 text-white lg:flex">
+    <TooltipProvider delayDuration={250}>
+    <aside className="hidden min-h-screen min-w-[260px] w-[260px] shrink-0 flex-col bg-[#1C1F3A] p-5 text-white lg:flex">
       <div className="flex items-center gap-3">
         <div className="grid h-10 w-10 place-items-center rounded-2xl bg-white/10">
           <PiggyBank className="h-5 w-5" />
@@ -123,6 +125,7 @@ export function Sidebar({
       </div>
       {addType && <div className="fixed inset-0 z-40 grid place-items-center bg-slate-950/40 p-6 text-slate-950"><div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl"><h3 className="text-xl font-semibold">Add {addType === "credit" ? "Credit Card" : "Savings Account"}</h3><div className="mt-4 space-y-3"><SidebarModalInput label="Account name" value={draft.name} onChange={(value) => setDraft({ ...draft, name: value })} /><SidebarModalInput label={addType === "credit" ? "Current balance owed" : "Starting balance"} type="number" value={String(draft.balanceYen)} onChange={(value) => setDraft({ ...draft, balanceYen: Number(value) || 0 })} />{addType === "credit" && <SidebarModalInput label="Credit limit" type="number" value={String(draft.creditLimit)} onChange={(value) => setDraft({ ...draft, creditLimit: Number(value) || 0 })} />}<div className="flex gap-3"><button type="button" onClick={() => setAddType(null)} className="flex-1 rounded-2xl bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-700">Cancel</button><button type="button" onClick={saveAccount} className="flex-1 rounded-2xl bg-[#1C1F3A] px-4 py-3 text-sm font-semibold text-white">Add</button></div></div></div></div>}
     </aside>
+    </TooltipProvider>
   );
 }
 
@@ -137,7 +140,7 @@ function SidebarAccountRow({ account, onClick, onEdit }: { account: Account; onC
     onEdit({ name });
   };
   const archiveAccount = () => onEdit({ isArchived: true } as Partial<Account>);
-  return <button type="button" onClick={onClick} onContextMenu={(event) => { event.preventDefault(); if (window.confirm("Edit this account? Choose Cancel to archive instead.")) editAccount(); else archiveAccount(); }} className="flex w-full items-center justify-between gap-3 rounded-2xl px-2 py-2 text-left text-sm hover:bg-white/8"><span className="truncate text-white/70">{account.name}</span><span className={`font-medium tabular-nums ${account.balanceYen < 0 ? "text-red-300" : "text-white"}`}>{formatJPY(account.balanceYen)}</span></button>;
+  return <button type="button" onClick={onClick} onContextMenu={(event) => { event.preventDefault(); if (window.confirm("Edit this account? Choose Cancel to archive instead.")) editAccount(); else archiveAccount(); }} className="flex w-full min-w-0 items-center gap-2 rounded-2xl px-2 py-2 text-left text-sm hover:bg-white/8"><Tooltip><TooltipTrigger asChild><span className="min-w-0 flex-1 truncate text-white/70">{account.name}</span></TooltipTrigger><TooltipContent side="right">{account.name}</TooltipContent></Tooltip><span className={`ml-auto flex-shrink-0 text-right font-medium tabular-nums ${account.balanceYen < 0 ? "text-red-300" : "text-white"}`}>{formatJPY(account.balanceYen)}</span></button>;
 }
 
 function SidebarModalInput({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (value: string) => void; type?: string }) {
