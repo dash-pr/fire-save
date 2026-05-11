@@ -9,6 +9,7 @@ import {
   runMonteCarloSimulation,
   simulateWithdrawalSurvival,
 } from "../forecast";
+import { calculateJapanMortgagePayment, computeJapanResidenceTax, runJapanFireMonteCarlo, runJapanFireProjection } from "../forecasting-japan";
 import { calculateHealthScore, calculateNetWorth } from "../finance";
 import { forecastInputs } from "@/data/sample-data";
 
@@ -107,5 +108,30 @@ describe("forecast and risk logic", () => {
     const result = simulateWithdrawalSurvival({ ...forecastInputs, returnVolatility: 0 }, 200_000_000, 10);
     expect(result.survivalProbability).toBeGreaterThanOrEqual(0);
     expect(result.survivalProbability).toBeLessThanOrEqual(1);
+  });
+
+  it("calculates Japan FIRE projection with wrapper balances and targets", () => {
+    const result = runJapanFireProjection({ ...forecastInputs, currentPortfolioYen: 40_000_000, monthlyContributionYen: 400_000, returnVolatility: 0 }, "base");
+    expect(result.preTaxFatFireNumberYen).toBeGreaterThan(0);
+    expect(result.postTaxFatFireNumberYen).toBeGreaterThan(result.preTaxFatFireNumberYen);
+    expect(result.rows[0].nisaYen + result.rows[0].iDeCoYen + result.rows[0].taxableYen).toBeGreaterThan(0);
+    expect(result.rows.some((row) => row.age === forecastInputs.targetRetirementAge)).toBe(true);
+  });
+
+  it("models Japan-specific tax and mortgage assumptions", () => {
+    expect(computeJapanResidenceTax(650_000)).toBe(46_000);
+    expect(computeJapanResidenceTax(995_000)).toBe(100_583);
+    expect(calculateJapanMortgagePayment(100_000_000, 0.015, 35)).toBeGreaterThan(250_000);
+  });
+
+  it("returns Japan Monte Carlo fan chart and survival probabilities", () => {
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const result = runJapanFireMonteCarlo({ ...forecastInputs, returnVolatility: 0 }, "base", 10);
+    expect(result.fanChart.length).toBeGreaterThan(0);
+    expect(result.probabilityByAge.by60).toBeGreaterThanOrEqual(0);
+    expect(result.probabilityByAge.by60).toBeLessThanOrEqual(1);
+    expect(result.survival.to90).toBeGreaterThanOrEqual(0);
+    expect(result.survival.to90).toBeLessThanOrEqual(1);
+    randomSpy.mockRestore();
   });
 });
