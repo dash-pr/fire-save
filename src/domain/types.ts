@@ -73,12 +73,14 @@ export type BudgetRow = {
 
 export type CreditDebt = {
   id: string;
+  categoryId?: string;
   type: DebtType;
   cardName: string;
   description?: string;
   currentBalanceYen: Yen;
   originalAmountYen?: Yen;
   monthlyPaymentYen: Yen;
+  paymentDueDay?: number;
   annualInterestRate: number;
   totalInstallments?: number;
   installmentsPaid?: number;
@@ -141,6 +143,20 @@ export type NisaContribution = {
   year: number;
   accountType: NisaAccountType;
   totalContributed: Yen;
+};
+
+export type DebtListResponse = {
+  debts: CreditDebt[];
+};
+
+export type DebtMutationResponse = {
+  debt: CreditDebt;
+};
+
+export type DebtDeleteResponse = {
+  deleted: boolean;
+  movedTransactions: number;
+  removedCategoryId?: string | null;
 };
 
 export type IncomeEntriesResponse = {

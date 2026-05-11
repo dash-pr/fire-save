@@ -223,6 +223,7 @@ model CreditDebt {
   originalAmountYen   Int?
   monthlyPaymentYen   Int       @default(0)
   minimumPaymentYen   Int?
+  paymentDueDay       Int?
   annualInterestRate  Float     @default(0)
   totalInstallments   Int?
   installmentsPaid    Int?

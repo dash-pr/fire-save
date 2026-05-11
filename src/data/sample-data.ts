@@ -88,9 +88,9 @@ export const savingsGoals: SavingsGoal[] = [
 ];
 
 export const debts: CreditDebt[] = [
-  { id: "debt-ribo", type: "revolving", cardName: "Rakuten Card", description: "Ribo-barai", currentBalanceYen: 300000, monthlyPaymentYen: 15000, annualInterestRate: 0.15 },
-  { id: "debt-bunkatsu", type: "installment", cardName: "JCB Card", description: "Camera bunkatsu", currentBalanceYen: 80000, originalAmountYen: 120000, monthlyPaymentYen: 10000, annualInterestRate: 0, totalInstallments: 12, installmentsPaid: 4 },
-  { id: "debt-ikkatsu", type: "lump_sum", cardName: "Amazon Mastercard", description: "Ikkatsu billing", currentBalanceYen: 45000, monthlyPaymentYen: 45000, annualInterestRate: 0, expectedBillingDate: "2026-06-10" },
+  { id: "debt-ribo", categoryId: "cat-ribo", type: "revolving", cardName: "Rakuten Card", description: "Ribo-barai", currentBalanceYen: 300000, monthlyPaymentYen: 15000, paymentDueDay: 27, annualInterestRate: 0.15 },
+  { id: "debt-bunkatsu", categoryId: "cat-bunkatsu", type: "installment", cardName: "JCB Card", description: "Camera bunkatsu", currentBalanceYen: 80000, originalAmountYen: 120000, monthlyPaymentYen: 10000, paymentDueDay: 10, annualInterestRate: 0, totalInstallments: 12, installmentsPaid: 4 },
+  { id: "debt-ikkatsu", type: "lump_sum", cardName: "Amazon Mastercard", description: "Ikkatsu billing", currentBalanceYen: 45000, monthlyPaymentYen: 45000, paymentDueDay: 15, annualInterestRate: 0, expectedBillingDate: "2026-06-10" },
 ];
 
 export const investments: Investment[] = [
