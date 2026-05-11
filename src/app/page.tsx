@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -42,8 +42,7 @@ import {
   calculateDeterministicForecast,
   getCurrentAge,
 } from "@/domain/forecast";
-import { defaultHypotheticalForecastInputs } from "@/domain/forecasting";
-import { japanFireDefaults, runJapanFireMonteCarlo, runJapanFireProjection, type JapanMonteCarloResult } from "@/domain/forecasting-japan";
+import { ForecastPage } from "@/components/forecast/forecast-page";
 import { calculateHealthScore, calculateNetWorth } from "@/domain/finance";
 import { calculateInvestmentGain, calculateLifetimeNisaUsage, formatInvestmentSubtype, NISA_LIFETIME_LIMIT_YEN } from "@/domain/investments";
 import type { Account, BudgetAssignment, Category, CreditDebt, ForecastInputs, IncomeEntry, Investment, MerchantRule, SavingsGoal, Transaction } from "@/domain/types";
@@ -1168,60 +1167,6 @@ function InvestmentsPage({ investments, setInvestments }: { investments: Investm
   );
 }
 
-function ForecastPage({ inputs, assumptions, setAssumption }: { inputs: ForecastInputs; assumptions: ForecastInputs; setAssumption: (field: keyof ForecastInputs, value: string | number | boolean | undefined) => void }) {
-  const baseInputs = useMemo(() => ({ ...japanFireDefaults, ...inputs, ...assumptions, currentAge: assumptions.currentAge ?? inputs.currentAge ?? 30 }) as ForecastInputs, [assumptions, inputs]);
-  const [whatIf, setWhatIf] = useState({ monthlyContributionYen: baseInputs.monthlyContributionYen, expectedAnnualReturn: baseInputs.expectedAnnualReturn, annualContributionIncreaseRate: baseInputs.annualContributionIncreaseRate ?? 0, targetAnnualRetirementSpendYen: baseInputs.targetAnnualRetirementSpendYen, safeWithdrawalRate: baseInputs.safeWithdrawalRate, targetRetirementAge: baseInputs.targetRetirementAge });
-  const whatIfInputs = useMemo(() => ({ ...baseInputs, ...whatIf, baseRealReturn: whatIf.expectedAnnualReturn, activeScenario: baseInputs.activeScenario ?? "base" }) as ForecastInputs, [baseInputs, whatIf]);
-  const scenario = whatIfInputs.activeScenario ?? "base";
-  const projection = useMemo(() => runJapanFireProjection(whatIfInputs, scenario), [scenario, whatIfInputs]);
-  const scenarioProjectionData = useMemo(() => {
-    const base = runJapanFireProjection(whatIfInputs, "base").rows;
-    const bull = runJapanFireProjection(whatIfInputs, "bull").rows;
-    const bear = runJapanFireProjection(whatIfInputs, "bear").rows;
-    return projection.rows.map((row, index) => ({ ...row, basePortfolioYen: base[index]?.displayedPortfolioYen ?? 0, bullPortfolioYen: bull[index]?.displayedPortfolioYen ?? 0, bearPortfolioYen: bear[index]?.displayedPortfolioYen ?? 0 }));
-  }, [projection.rows, whatIfInputs]);
-  const [monteCarlo, setMonteCarlo] = useState<JapanMonteCarloResult>(() => runJapanFireMonteCarlo(whatIfInputs, scenario, 1000));
-  const [methodologyOpen, setMethodologyOpen] = useState(false);
-  useEffect(() => {
-    const id = window.setTimeout(() => setMonteCarlo(runJapanFireMonteCarlo(whatIfInputs, scenario, 1000)), 300);
-    return () => window.clearTimeout(id);
-  }, [scenario, whatIfInputs]);
-  const resetDefaults = () => Object.entries({ ...defaultHypotheticalForecastInputs, ...japanFireDefaults }).forEach(([key, value]) => setAssumption(key as keyof ForecastInputs, value as string | number | boolean | undefined));
-  const fireProbability = monteCarlo.probabilityByAge.by60;
-  const successTone = fireProbability > 0.85 ? "text-emerald-700" : fireProbability >= 0.7 ? "text-amber-700" : "text-red-700";
-  const currentRow = projection.rows[0];
-  const targetRow = projection.rows.find((row) => row.age === whatIf.targetRetirementAge) ?? projection.rows[projection.rows.length - 1];
-
-  const fireGaugePct = Math.round(fireProbability * 100);
-  return <div className="space-y-4"><NoticeBanner tone="blue">Hypothetical projection — adjust inputs to model your optimal path. Fully separate from Budget and Investment data.</NoticeBanner><section className="grid gap-4 xl:grid-cols-4"><MetricCard label="Pre-tax FATFire number" value={formatJPY(projection.preTaxFatFireNumberYen)} detail="FAT spend ÷ SWR × buffer" /><MetricCard label="Post-tax FATFire number" value={formatJPY(projection.postTaxFatFireNumberYen)} detail="Taxable gross-up at 20.315%" /><MetricCard label="Projected FATFire age" value={projection.projectedFireAge ? `Age ${projection.projectedFireAge}` : "Not reached"} detail={`${scenario.toUpperCase()} scenario`} /><MetricCard label="Coast FIRE number" value={formatJPY(projection.coastFireNumberYen)} detail={projection.yearsToCoastFire === null ? "Not reached" : `Reach in ${projection.yearsToCoastFire} years`} /></section><section className="grid gap-4 xl:grid-cols-[320px_1fr_320px]"><Card title="Assumptions" eyebrow="Japan FIRE inputs"><div className="grid gap-3"><NumberInput label="Current age" value={baseInputs.currentAge ?? 30} onChange={(value) => setAssumption("currentAge", value)} /><NumberInput label="Target retirement age" value={baseInputs.targetRetirementAge} onChange={(value) => { setAssumption("targetRetirementAge", value); setWhatIf((previous) => ({ ...previous, targetRetirementAge: value })); }} /><CurrencyInput label="Current investable assets" value={baseInputs.currentPortfolioYen} onChange={(value) => setAssumption("currentPortfolioYen", value)} /><CurrencyInput label="Current iDeCo balance" value={baseInputs.currentIDeCoYen ?? 0} onChange={(value) => setAssumption("currentIDeCoYen", value)} /><CurrencyInput label="Current NISA balance" value={baseInputs.currentNisaYen ?? 0} onChange={(value) => setAssumption("currentNisaYen", value)} /><CurrencyInput label="Monthly investment amount" value={baseInputs.monthlyContributionYen} onChange={(value) => { setAssumption("monthlyContributionYen", value); setWhatIf((previous) => ({ ...previous, monthlyContributionYen: value })); }} /><PercentInput label="Base real return" value={baseInputs.baseRealReturn ?? baseInputs.expectedAnnualReturn} onChange={(value) => { setAssumption("baseRealReturn", value); setAssumption("expectedAnnualReturn", value); setWhatIf((previous) => ({ ...previous, expectedAnnualReturn: value })); }} /><PercentInput label="Inflation rate" value={baseInputs.inflationRate} onChange={(value) => setAssumption("inflationRate", value)} /><CurrencyInput label="Lean annual spend" value={baseInputs.leanAnnualSpendYen ?? 3_900_000} onChange={(value) => setAssumption("leanAnnualSpendYen", value)} /><CurrencyInput label="Regular annual spend" value={baseInputs.regularAnnualSpendYen ?? 4_900_000} onChange={(value) => setAssumption("regularAnnualSpendYen", value)} /><CurrencyInput label="FAT annual spend" value={baseInputs.fatAnnualSpendYen ?? baseInputs.targetAnnualRetirementSpendYen} onChange={(value) => { setAssumption("fatAnnualSpendYen", value); setAssumption("targetAnnualRetirementSpendYen", value); setWhatIf((previous) => ({ ...previous, targetAnnualRetirementSpendYen: value })); }} /><PercentInput label="Safe withdrawal rate" value={baseInputs.safeWithdrawalRate} onChange={(value) => { setAssumption("safeWithdrawalRate", value); setWhatIf((previous) => ({ ...previous, safeWithdrawalRate: value })); }} /><PercentInput label="SWR buffer" value={baseInputs.swrBufferRate ?? 0.15} onChange={(value) => setAssumption("swrBufferRate", value)} /><SelectField label="Tax wrapper" value={baseInputs.taxWrapperMode ?? "split"} onChange={(value) => setAssumption("taxWrapperMode", value)}><option value="split">iDeCo → NISA → Taxable</option><option value="nisa">NISA first</option><option value="ideco">iDeCo only</option><option value="taxable">Taxable only</option></SelectField><CurrencyInput label="iDeCo monthly limit" value={baseInputs.idecoMonthlyContributionYen ?? 23_000} onChange={(value) => setAssumption("idecoMonthlyContributionYen", value)} /><SelectField label="Scenario" value={scenario} onChange={(value) => setAssumption("activeScenario", value)}><option value="bear">Bear</option><option value="base">Base</option><option value="bull">Bull</option><option value="custom">Custom</option></SelectField><ToggleRow label="Show nominal ¥ instead of real ¥" checked={baseInputs.showNominal ?? false} onChange={(checked) => setAssumption("showNominal", checked)} /><ToggleRow label="Include Nenkin pension from age 65" checked={baseInputs.includePension ?? false} onChange={(checked) => setAssumption("includePension", checked)} /><ToggleRow label="Go-Go / Slow-Go / No-Go spending phases" checked={baseInputs.spendingPhasesEnabled ?? true} onChange={(checked) => setAssumption("spendingPhasesEnabled", checked)} /><ToggleRow label="Semi-retirement bridge phase" checked={baseInputs.bridgePhaseEnabled ?? false} onChange={(checked) => setAssumption("bridgePhaseEnabled", checked)} /><button type="button" onClick={resetDefaults} className="mt-2 rounded-lg bg-[#FAFAF8] px-3 py-2 text-sm font-medium text-slate-700 hover:bg-[#EEEDE9]">Reset to defaults</button></div></Card><div className="space-y-6"><Card title="Japan FIRE projection" eyebrow={baseInputs.showNominal ? "Nominal yen" : "Real 2026 yen"}><div className="h-96"><ResponsiveContainer width="100%" height="100%"><AreaChart data={scenarioProjectionData}><CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" /><XAxis dataKey="age" label={{ value: "Age", position: "insideBottom", offset: -4 }} /><YAxis tickFormatter={compactCurrency} width={56} label={{ value: "JPY", angle: -90, position: "insideLeft" }} /><Tooltip formatter={(value) => formatJPY(Number(value))} labelFormatter={(value) => `Age ${value}`} /><ReferenceLine x={whatIf.targetRetirementAge} stroke="#F59E0B" strokeDasharray="4 4" label="Retire" />{projection.coastFireAge && <ReferenceLine x={projection.coastFireAge} stroke="#4CAF82" strokeDasharray="4 4" label="Coast" />}<Line type="monotone" dataKey="basePortfolioYen" name="Base portfolio" stroke="#F5A623" strokeWidth={2} dot={false} /><Line type="monotone" dataKey="bullPortfolioYen" name="Bull portfolio" stroke="#4CAF82" strokeWidth={2} dot={false} /><Line type="monotone" dataKey="bearPortfolioYen" name="Bear portfolio" stroke="#F97373" strokeWidth={2} dot={false} /><Line type="monotone" dataKey="leanTargetYen" name="Lean FIRE" stroke="#94A3B8" strokeDasharray="3 3" dot={false} /><Line type="monotone" dataKey="regularTargetYen" name="Regular FIRE" stroke="#4A7CFF" strokeDasharray="5 3" dot={false} /><Line type="monotone" dataKey="fatTargetYen" name="FATFire" stroke="#1C1F3A" strokeDasharray="7 4" dot={false} /></AreaChart></ResponsiveContainer></div></Card><section className="grid gap-4 md:grid-cols-4"><MetricCard label="Depletion age" value={projection.depletionAge ? `Age ${projection.depletionAge}` : "Not depleted"} detail="Base deterministic drawdown" /><MetricCard label="P10 depletion age" value={monteCarlo.survival.p10DepletionAge ? `Age ${monteCarlo.survival.p10DepletionAge}` : "—"} detail="Monte Carlo downside" /><MetricCard label="Survive to age 90" value={formatPercent(monteCarlo.survival.to90)} detail={projection.survivesTo90 ? "Base case survives" : "Base case depleted"} tone={projection.survivesTo90 ? "green" : "amber"} /><MetricCard label="Survive to age 100" value={formatPercent(monteCarlo.survival.to100)} detail={projection.survivesTo100 ? "Base case survives" : "Base case depleted"} tone={projection.survivesTo100 ? "green" : "amber"} /></section><Card title="Wrapper allocation" eyebrow="iDeCo / NISA / Taxable"><div className="h-72"><ResponsiveContainer width="100%" height="100%"><AreaChart data={projection.rows}><CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" /><XAxis dataKey="age" /><YAxis tickFormatter={compactCurrency} width={56} /><Tooltip formatter={(value) => formatJPY(Number(value))} /><Area type="monotone" dataKey="iDeCoYen" name="iDeCo" stackId="portfolio" stroke="#8B5CF6" fill="#8B5CF6" fillOpacity={0.55} /><Area type="monotone" dataKey="nisaYen" name="NISA" stackId="portfolio" stroke="#4A7CFF" fill="#4A7CFF" fillOpacity={0.55} /><Area type="monotone" dataKey="taxableYen" name="Taxable" stackId="portfolio" stroke="#4CAF82" fill="#4CAF82" fillOpacity={0.55} /></AreaChart></ResponsiveContainer></div></Card><Card title="Monte Carlo fan chart" eyebrow="1000 simulations"><div className="mb-3 flex items-center gap-4 text-[11px] text-[#6B7280]"><span className="inline-flex items-center gap-1.5"><span className="h-3 w-3 rounded" style={{ backgroundColor: "rgba(74,124,255,0.08)" }} /> p10 / p90</span><span className="inline-flex items-center gap-1.5"><span className="h-3 w-3 rounded" style={{ backgroundColor: "rgba(74,124,255,0.15)" }} /> p25 / p75</span><span className="inline-flex items-center gap-1.5"><span className="h-[2px] w-5" style={{ backgroundColor: "#4A7CFF" }} /> p50 median</span></div><div className="h-80"><ResponsiveContainer width="100%" height="100%"><AreaChart data={monteCarlo.fanChart}><CartesianGrid strokeDasharray="3 3" stroke="#F0EFEB" /><XAxis dataKey="age" label={{ value: "Age", position: "insideBottom", offset: -4 }} tick={{ fill: "#6B7280", fontSize: 11 }} /><YAxis tickFormatter={compactCurrency} width={56} tick={{ fill: "#6B7280", fontSize: 11 }} /><Tooltip formatter={(value) => formatJPY(Number(value))} contentStyle={{ backgroundColor: "white", border: "1px solid #F0EFEB", borderRadius: 8, fontSize: 12 }} /><Area type="monotone" dataKey="p90" stroke="none" fill="#4A7CFF" fillOpacity={0.08} /><Area type="monotone" dataKey="p75" stroke="none" fill="#4A7CFF" fillOpacity={0.15} /><Area type="monotone" dataKey="p25" stroke="none" fill="#4A7CFF" fillOpacity={0.15} /><Area type="monotone" dataKey="p10" stroke="none" fill="#4A7CFF" fillOpacity={0.08} /><Line type="monotone" dataKey="p50" stroke="#4A7CFF" strokeWidth={2.5} dot={false} /></AreaChart></ResponsiveContainer></div></Card><Card title="Drawdown and FIRE age distributions" eyebrow="Risk analysis"><div className="grid gap-6 xl:grid-cols-2"><div><p className="mb-2 text-[11px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">Worst single-year drawdown</p><div className="h-52"><ResponsiveContainer width="100%" height="100%"><BarChart data={monteCarlo.drawdownHistogram}><CartesianGrid strokeDasharray="3 3" stroke="#F0EFEB" vertical={false} /><XAxis dataKey="bucket" tick={{ fill: "#6B7280", fontSize: 11 }} /><YAxis tick={{ fill: "#6B7280", fontSize: 11 }} /><Tooltip contentStyle={{ backgroundColor: "white", border: "1px solid #F0EFEB", borderRadius: 8, fontSize: 12 }} /><Bar dataKey="count" fill="#9CA3AF" radius={[2, 2, 0, 0]} /></BarChart></ResponsiveContainer></div></div><div><p className="mb-2 text-[11px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">FATFire age distribution</p><div className="h-52"><ResponsiveContainer width="100%" height="100%"><BarChart data={monteCarlo.fireAgeHistogram}><CartesianGrid strokeDasharray="3 3" stroke="#F0EFEB" vertical={false} /><XAxis dataKey="age" tick={{ fill: "#6B7280", fontSize: 11 }} /><YAxis tick={{ fill: "#6B7280", fontSize: 11 }} /><Tooltip contentStyle={{ backgroundColor: "white", border: "1px solid #F0EFEB", borderRadius: 8, fontSize: 12 }} /><Bar dataKey="count" fill="#4A7CFF" radius={[2, 2, 0, 0]} /></BarChart></ResponsiveContainer></div></div></div></Card><Card title="Cash flow and Japan tax context" eyebrow="Income, expenses, surplus"><div className="grid gap-4 md:grid-cols-3"><MetricCard label="Current net income" value={formatJPY(currentRow.netMonthlyIncomeYen)} detail="Post withholding, before residence tax" /><MetricCard label="Residence tax" value={formatJPY(currentRow.residenceTaxYen)} detail="Interpolated Japanese resident tax" tone="amber" /><MetricCard label="iDeCo tax saving" value={formatJPY(targetRow.iDeCoTaxSavingYen)} detail="Estimated annual deduction benefit" tone="green" /></div><div className="mt-4 h-72"><ResponsiveContainer width="100%" height="100%"><BarChart data={projection.rows.filter((row) => row.age <= 65)}><CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" /><XAxis dataKey="age" /><YAxis tickFormatter={compactCurrency} width={56} /><Tooltip formatter={(value) => formatJPY(Number(value))} /><Bar dataKey="netMonthlyIncomeYen" name="Net income" fill="#4A7CFF" /><Bar dataKey="totalMonthlyExpensesYen" name="Expenses" fill="#F97373" /><Line type="monotone" dataKey="investableMonthlyYen" name="Investable surplus" stroke="#4CAF82" strokeWidth={3} /></BarChart></ResponsiveContainer></div></Card></div><div className="space-y-4">
-<Card title="Success rate" eyebrow="Probability of FIRE by 60">
-  <SuccessGauge pct={fireGaugePct} tone={successTone} />
-  <p className="mt-3 text-center text-[11px] text-[#6B7280]">{Math.round(fireProbability * 1000)} of 1000 simulated paths reach your target</p>
-  <div className="mt-4 grid grid-cols-3 gap-2 border-t border-[#F0EFEB] pt-3 text-center text-[11px]">
-    <div><p className="text-[#6B7280]">By 55</p><p className="mt-0.5 tabular-nums text-slate-900">{formatPercent(monteCarlo.probabilityByAge.by55)}</p></div>
-    <div><p className="text-[#6B7280]">By 60</p><p className="mt-0.5 tabular-nums text-slate-900">{formatPercent(monteCarlo.probabilityByAge.by60)}</p></div>
-    <div><p className="text-[#6B7280]">By 65</p><p className="mt-0.5 tabular-nums text-slate-900">{formatPercent(monteCarlo.probabilityByAge.by65)}</p></div>
-  </div>
-</Card>
-<Card title="What-if" eyebrow="Instant recalculation">
-  <div className="space-y-4">
-    <SliderRow label="Monthly contribution" min={0} max={900000} step={10000} value={whatIf.monthlyContributionYen} onChange={(value) => setWhatIf((previous) => ({ ...previous, monthlyContributionYen: value }))} format={(value) => formatJPY(value)} />
-    <SliderRow label="Expected real return" min={0} max={12} step={0.1} value={Math.round(whatIf.expectedAnnualReturn * 1000) / 10} onChange={(value) => setWhatIf((previous) => ({ ...previous, expectedAnnualReturn: value / 100 }))} format={(value) => `${value.toFixed(1)}%`} />
-    <SliderRow label="Annual contribution increase" min={0} max={8} step={0.25} value={Math.round((whatIf.annualContributionIncreaseRate ?? 0) * 400) / 4} onChange={(value) => setWhatIf((previous) => ({ ...previous, annualContributionIncreaseRate: value / 100 }))} format={(value) => `${value.toFixed(2)}%`} />
-    <SliderRow label="FAT annual spend" min={3000000} max={12000000} step={100000} value={whatIf.targetAnnualRetirementSpendYen} onChange={(value) => setWhatIf((previous) => ({ ...previous, targetAnnualRetirementSpendYen: value }))} format={(value) => formatJPY(value)} />
-    <SliderRow label="Safe withdrawal rate" min={2.5} max={5} step={0.1} value={Math.round(whatIf.safeWithdrawalRate * 1000) / 10} onChange={(value) => setWhatIf((previous) => ({ ...previous, safeWithdrawalRate: value / 100 }))} format={(value) => `${value.toFixed(1)}%`} />
-  </div>
-</Card>
-<Card title="Notes" eyebrow="Context">
-  <div className="space-y-3 text-xs leading-relaxed">
-    <div><p className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">NISA and taxable treatment</p><p className="mt-1 text-slate-700">NISA cap age: {projection.nisaCapAge ? `Age ${projection.nisaCapAge}` : "Not reached"}. Taxable growth applies a 20.315% capital gains drag.</p></div>
-    <div className="border-t border-[#F0EFEB] pt-3"><p className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">Break-even drawdown recovery</p><p className="mt-1 text-slate-700">{projection.breakEvenDrawdownRecoveryYears === null ? "Set starting assets to estimate recovery." : `A 20% drawdown would take about ${projection.breakEvenDrawdownRecoveryYears} years of current contributions to replace.`}</p></div>
-    <div className="border-t border-[#F0EFEB] pt-3"><p className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">Gap analysis</p>{projection.suggestions.length === 0 ? <p className="mt-1 text-slate-700">No gap detected in this scenario.</p> : <ul className="mt-1 space-y-0.5 text-slate-700">{projection.suggestions.slice(0, 4).map((suggestion) => <li key={suggestion.key}>{suggestion.label}: cut {Math.round(suggestion.percentCut * 100)}% to free <span className="tabular-nums">{formatJPY(suggestion.cutMonthlyYen)}</span>/mo.</li>)}</ul>}</div>
-  </div>
-</Card>
-</div></section><Card title="How is this calculated?" eyebrow="Methodology" action={<button type="button" onClick={() => setMethodologyOpen(!methodologyOpen)} aria-label="Toggle methodology" className="rounded-md p-1.5 text-[#6B7280] hover:bg-[#FAFAF8] hover:text-slate-900"><ChevronDown className={`h-4 w-4 transition ${methodologyOpen ? "" : "-rotate-90"}`} /></button>}><AnimatePresence>{methodologyOpen && <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2, ease: "easeOut" }} className="overflow-hidden"><div className="space-y-3 text-sm leading-relaxed text-[#6B7280]"><p>The projection is annual and hypothetical-only. It starts with manual portfolio inputs and never reads actual Budget, Investment, Debt, or Transaction state.</p><p>Income grows by the configured salary-growth step and is capped by the net salary cap. Residence tax uses the reference interpolation between representative Japanese net-income/tax points.</p><p>Mortgage modeling follows the reference approach: a purchase age creates a mortgage, variable rates can increase annually up to a cap, and payments recalculate every five years.</p><p>Investment contributions are allocated by wrapper mode. Split mode contributes to iDeCo first, then NISA up to the annual and lifetime caps, then taxable brokerage. Taxable growth applies a 20.315% capital-gains tax drag; NISA is tax-free; iDeCo receives an estimated deduction benefit.</p><p>Lean, Regular, and FAT FIRE thresholds are annual spend divided by SWR, with the Regular/FAT thresholds applying the SWR buffer. The post-tax FATFire number gross-ups the target for taxable capital-gains treatment.</p><p>Coast FIRE is the amount needed today to compound to the FATFire target by retirement with no further contributions. The chart marks when the base trajectory reaches it.</p><p>Withdrawal modeling continues past retirement and draws from taxable, then NISA, then iDeCo after age 60. Go-Go, Slow-Go, and No-Go phases multiply retirement spending; Nenkin can offset withdrawals from age 65.</p><p>Monte Carlo runs 1000 paths using normally distributed annual returns around the selected scenario return and the volatility input. It reports percentile fan bands, FIRE-age probability, drawdowns, p10 depletion age, and survival to ages 90 and 100.</p><p>Gap analysis ranks controllable expense reductions by how much monthly cash they free relative to the estimated monthly shortfall. These are planning estimates, not financial advice.</p></div></motion.div>}</AnimatePresence></Card></div>;
-}
-
 function ReportsPage({ selectedMonth, transactions, incomeEntries, categories, accounts, investments, debts, onCategoryClick }: { selectedMonth: string; transactions: Transaction[]; incomeEntries: IncomeEntry[]; categories: Category[]; accounts: Account[]; investments: Investment[]; debts: CreditDebt[]; onCategoryClick: (categoryId: string) => void }) {
   const months = Array.from({ length: 6 }, (_, index) => shiftMonth(selectedMonth, index - 5));
   const availableDataMonths = new Set([...transactions.map((transaction) => transaction.date.slice(0, 7)), ...incomeEntries.map((entry) => entry.month)]);
@@ -1627,64 +1572,3 @@ function EditableList({ title, children }: { title: string; children: ReactNode 
   );
 }
 
-function ToggleRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (checked: boolean) => void }) {
-  return (
-    <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md px-1 py-1.5 text-xs text-slate-700 hover:bg-[#FAFAF8]">
-      <span className="min-w-0 flex-1 leading-relaxed">{label}</span>
-      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="h-3.5 w-3.5 shrink-0 accent-[#4A7CFF]" />
-    </label>
-  );
-}
-
-function SliderRow({ label, min, max, step, value, onChange, format }: { label: string; min: number; max: number; step: number; value: number; onChange: (value: number) => void; format: (value: number) => string }) {
-  return (
-    <div>
-      <div className="mb-1 flex items-baseline justify-between">
-        <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">{label}</span>
-        <span className="text-sm tabular-nums text-slate-900">{format(value)}</span>
-      </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-        className="w-full accent-[#4A7CFF]"
-      />
-    </div>
-  );
-}
-
-function SuccessGauge({ pct, tone }: { pct: number; tone: string }) {
-  const radius = 60;
-  const circumference = Math.PI * radius;
-  const offset = circumference - (circumference * Math.min(100, Math.max(0, pct))) / 100;
-  const strokeColor = tone.includes("emerald") ? "#4CAF82" : tone.includes("amber") ? "#F5A623" : tone.includes("red") ? "#E5534B" : "#4A7CFF";
-  return (
-    <div className="flex items-center justify-center">
-      <svg viewBox="0 0 160 90" className="h-28 w-48">
-        <path
-          d="M 20 80 A 60 60 0 0 1 140 80"
-          stroke="#EEEDE9"
-          strokeWidth={10}
-          fill="none"
-          strokeLinecap="round"
-        />
-        <path
-          d="M 20 80 A 60 60 0 0 1 140 80"
-          stroke={strokeColor}
-          strokeWidth={10}
-          fill="none"
-          strokeLinecap="round"
-          strokeDasharray={circumference}
-          strokeDashoffset={offset}
-          style={{ transition: "stroke-dashoffset 300ms ease-out" }}
-        />
-        <text x="80" y="72" textAnchor="middle" className="tabular-nums" fill={strokeColor} fontSize="28" fontWeight="500">
-          {pct}%
-        </text>
-      </svg>
-    </div>
-  );
-}
