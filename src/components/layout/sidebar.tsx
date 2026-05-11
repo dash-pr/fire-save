@@ -4,12 +4,12 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   BarChart3,
   ChevronDown,
-  CircleDollarSign,
   CreditCard,
   Flag,
   Home,
   LineChart,
   PiggyBank,
+  Plus,
   ReceiptText,
   Settings,
   Target,
@@ -30,7 +30,6 @@ const nav = [
   { key: "forecast", label: "FATFire Projection", icon: Flag },
   { key: "reports", label: "Reports", icon: BarChart3 },
   { key: "import", label: "Add Transactions", icon: UploadCloud },
-  { key: "settings", label: "Settings", icon: Settings },
 ];
 
 export function Sidebar({
@@ -74,75 +73,305 @@ export function Sidebar({
 
   return (
     <TooltipProvider delayDuration={250}>
-    <aside className="hidden min-h-screen min-w-[260px] w-[260px] shrink-0 flex-col bg-[#1C1F3A] p-5 text-white lg:flex">
-      <div className="flex items-center gap-3">
-        <div className="grid h-10 w-10 place-items-center rounded-2xl bg-white/10">
-          <PiggyBank className="h-5 w-5" />
+      <aside className="hidden min-h-screen w-[260px] shrink-0 flex-col bg-[#1C1F3A] px-4 py-5 text-white lg:flex">
+        <div className="flex items-center gap-2.5 px-3">
+          <div className="grid h-8 w-8 place-items-center rounded-lg bg-white/10">
+            <PiggyBank className="h-4 w-4" />
+          </div>
+          <div>
+            <p className="text-sm font-medium leading-tight">FATFire Planner</p>
+            <p className="text-[11px] text-[#8B90B0]">Local MVP · JPY</p>
+          </div>
         </div>
-        <div>
-          <p className="text-lg font-semibold">FATFire Planner</p>
-          <p className="text-xs text-white/50">Local MVP · JPY</p>
-        </div>
-      </div>
 
-      <nav className="mt-8 space-y-1">
-        {nav.map((item) => {
-          const Icon = item.icon;
-          return (
+        <nav className="mt-6 space-y-0.5">
+          {nav.map((item) => {
+            const Icon = item.icon;
+            const active = activePage === item.key;
+            return (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => onNavigate(item.key)}
+                className={`flex h-10 w-full items-center gap-2.5 rounded-lg px-3 text-left text-[13px] transition ${
+                  active
+                    ? "bg-[#4A7CFF]/15 text-[#A9BEFF]"
+                    : "text-[#8B90B0] hover:bg-white/[0.06] hover:text-white"
+                }`}
+              >
+                <Icon className="h-[18px] w-[18px]" strokeWidth={active ? 2 : 1.8} />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="mt-8 space-y-5">
+          <SidebarAccountSection
+            title="Credit Cards"
+            total={creditAccounts.reduce((total, account) => total + account.balanceYen, 0)}
+            collapsed={collapsed.credit ?? false}
+            onToggle={() => setCollapsed((previous) => ({ ...previous, credit: !previous.credit }))}
+            onAdd={() => setAddType("credit")}
+            tone="red"
+          >
+            {creditAccounts.length === 0 ? (
+              <EmptySectionHint>No cards yet</EmptySectionHint>
+            ) : (
+              creditAccounts.map((account) => (
+                <SidebarAccountRow
+                  key={account.id}
+                  account={account}
+                  onClick={() => onSelectAccount(account.id)}
+                  onEdit={(changes) => onEditAccount(account.id, changes)}
+                />
+              ))
+            )}
+          </SidebarAccountSection>
+          <SidebarAccountSection
+            title="Savings Accounts"
+            total={savingsAccounts.reduce((total, account) => total + account.balanceYen, 0)}
+            collapsed={collapsed.savings ?? false}
+            onToggle={() => setCollapsed((previous) => ({ ...previous, savings: !previous.savings }))}
+            onAdd={() => setAddType("savings")}
+          >
+            {savingsAccounts.length === 0 ? (
+              <EmptySectionHint>No accounts yet</EmptySectionHint>
+            ) : (
+              savingsAccounts.map((account) => (
+                <SidebarAccountRow
+                  key={account.id}
+                  account={account}
+                  onClick={() => onSelectAccount(account.id)}
+                  onEdit={(changes) => onEditAccount(account.id, changes)}
+                />
+              ))
+            )}
+          </SidebarAccountSection>
+          <SidebarAccountSection
+            title="Investments"
+            total={investedTotal}
+            collapsed={collapsed.investments ?? false}
+            onToggle={() => setCollapsed((previous) => ({ ...previous, investments: !previous.investments }))}
+            onAdd={() => onNavigate("investments")}
+          >
             <button
-              key={item.key}
               type="button"
-              onClick={() => onNavigate(item.key)}
-              className={`flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left text-sm transition ${
-                activePage === item.key ? "bg-white text-[#1C1F3A]" : "text-white/75 hover:bg-white/10 hover:text-white"
-              }`}
+              onClick={() => onNavigate("investments")}
+              className="flex h-8 w-full items-center rounded-md px-2 text-left text-[12px] text-[#8B90B0] hover:bg-white/[0.06] hover:text-white"
             >
-              <Icon className="h-4 w-4" />
-              {item.label}
+              Manage investment accounts →
             </button>
-          );
-        })}
-      </nav>
-
-      <div className="mt-8 space-y-3 rounded-3xl bg-white/8 p-4">
-        <div className="flex items-center gap-2 text-sm font-semibold text-white/80"><WalletCards className="h-4 w-4" /> Accounts</div>
-        <SidebarAccountSection title="Credit Cards" total={creditAccounts.reduce((total, account) => total + account.balanceYen, 0)} collapsed={collapsed.credit ?? false} onToggle={() => setCollapsed((previous) => ({ ...previous, credit: !previous.credit }))} onAdd={() => setAddType("credit")} tone="red">
-          {creditAccounts.map((account) => <SidebarAccountRow key={account.id} account={account} onClick={() => onSelectAccount(account.id)} onEdit={(changes) => onEditAccount(account.id, changes)} />)}
-        </SidebarAccountSection>
-        <SidebarAccountSection title="Savings Accounts" total={savingsAccounts.reduce((total, account) => total + account.balanceYen, 0)} collapsed={collapsed.savings ?? false} onToggle={() => setCollapsed((previous) => ({ ...previous, savings: !previous.savings }))} onAdd={() => setAddType("savings")}>
-          {savingsAccounts.map((account) => <SidebarAccountRow key={account.id} account={account} onClick={() => onSelectAccount(account.id)} onEdit={(changes) => onEditAccount(account.id, changes)} />)}
-        </SidebarAccountSection>
-        <SidebarAccountSection title="Investments" total={investedTotal} collapsed={collapsed.investments ?? false} onToggle={() => setCollapsed((previous) => ({ ...previous, investments: !previous.investments }))} onAdd={() => onNavigate("investments")}>
-          <button type="button" onClick={() => onNavigate("investments")} className="w-full rounded-2xl bg-white/8 px-3 py-2 text-left text-sm text-white/70 hover:bg-white/12">Manage investment accounts</button>
-        </SidebarAccountSection>
-      </div>
-
-      <div className="mt-auto rounded-3xl bg-white p-4 text-[#1C1F3A]">
-        <div className="flex items-center gap-2 text-sm text-[#1C1F3A]/70">
-          <CircleDollarSign className="h-4 w-4" /> Net worth
+          </SidebarAccountSection>
         </div>
-        <p className="mt-2 text-xl font-semibold tabular-nums">{formatJPY(netWorthYen)}</p>
-      </div>
-      {addType && <div className="fixed inset-0 z-40 grid place-items-center bg-slate-950/40 p-6 text-slate-950"><div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl"><h3 className="text-xl font-semibold">Add {addType === "credit" ? "Credit Card" : "Savings Account"}</h3><div className="mt-4 space-y-3"><SidebarModalInput label="Account name" value={draft.name} onChange={(value) => setDraft({ ...draft, name: value })} /><SidebarModalInput label={addType === "credit" ? "Current balance owed" : "Starting balance"} type="number" value={String(draft.balanceYen)} onChange={(value) => setDraft({ ...draft, balanceYen: Number(value) || 0 })} />{addType === "credit" && <SidebarModalInput label="Credit limit" type="number" value={String(draft.creditLimit)} onChange={(value) => setDraft({ ...draft, creditLimit: Number(value) || 0 })} />}<div className="flex gap-3"><button type="button" onClick={() => setAddType(null)} className="flex-1 rounded-2xl bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-700">Cancel</button><button type="button" onClick={saveAccount} className="flex-1 rounded-2xl bg-[#1C1F3A] px-4 py-3 text-sm font-semibold text-white">Add</button></div></div></div></div>}
-    </aside>
+
+        <div className="mt-auto pt-6">
+          <div className="flex items-center justify-between px-2 pb-3">
+            <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#8B90B0]">
+              Net worth
+            </span>
+            <span className="text-sm font-medium tabular-nums text-white">
+              {formatJPY(netWorthYen)}
+            </span>
+          </div>
+          <div className="flex items-center justify-between border-t border-white/[0.06] px-2 pt-3 text-[11px] text-[#8B90B0]">
+            <button
+              type="button"
+              onClick={() => onNavigate("settings")}
+              className="inline-flex items-center gap-1.5 hover:text-white"
+            >
+              <Settings className="h-3.5 w-3.5" />
+              Settings
+            </button>
+            <span className="tabular-nums">v0.1.0</span>
+          </div>
+        </div>
+
+        {addType && (
+          <div className="fixed inset-0 z-40 grid place-items-center bg-slate-950/40 p-6 text-slate-950">
+            <div className="w-full max-w-[480px] rounded-2xl bg-white p-6 shadow-xl">
+              <h3 className="text-base font-medium">
+                Add {addType === "credit" ? "Credit Card" : "Savings Account"}
+              </h3>
+              <div className="mt-4 space-y-3">
+                <SidebarModalInput
+                  label="Account name"
+                  value={draft.name}
+                  onChange={(value) => setDraft({ ...draft, name: value })}
+                />
+                <SidebarModalInput
+                  label={addType === "credit" ? "Current balance owed" : "Starting balance"}
+                  type="number"
+                  value={String(draft.balanceYen)}
+                  onChange={(value) => setDraft({ ...draft, balanceYen: Number(value) || 0 })}
+                />
+                {addType === "credit" && (
+                  <SidebarModalInput
+                    label="Credit limit"
+                    type="number"
+                    value={String(draft.creditLimit)}
+                    onChange={(value) => setDraft({ ...draft, creditLimit: Number(value) || 0 })}
+                  />
+                )}
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setAddType(null)}
+                    className="flex-1 rounded-lg bg-[#F5F4F0] px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-[#EEEDE9]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={saveAccount}
+                    className="flex-1 rounded-lg bg-[#4A7CFF] px-4 py-2.5 text-sm font-medium text-white hover:bg-[#3F6DE8]"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </aside>
     </TooltipProvider>
   );
 }
 
-function SidebarAccountSection({ title, total, collapsed, onToggle, onAdd, children, tone = "green" }: { title: string; total: number; collapsed: boolean; onToggle: () => void; onAdd: () => void; children: ReactNode; tone?: "green" | "red" }) {
-  return <section className="rounded-2xl bg-white/6 p-3"><div className="flex items-center justify-between gap-2"><button type="button" onClick={onToggle} className="flex min-w-0 items-center gap-2 text-left text-sm font-semibold text-white/85"><ChevronDown className={`h-4 w-4 transition ${collapsed ? "-rotate-90" : ""}`} /><span className="truncate">{title}</span></button><div className="flex items-center gap-2"><span className={`text-xs font-semibold tabular-nums ${tone === "red" && total < 0 ? "text-red-300" : "text-emerald-200"}`}>{formatJPY(total)}</span><button type="button" onClick={onAdd} className="rounded-full bg-white/10 px-2 py-1 text-xs font-semibold text-white/80 hover:bg-white/20">+ Add</button></div></div><AnimatePresence initial={false}>{!collapsed && <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2, ease: "easeOut" }} className="mt-3 space-y-2 overflow-hidden">{children}</motion.div>}</AnimatePresence></section>;
+function SidebarAccountSection({
+  title,
+  total,
+  collapsed,
+  onToggle,
+  onAdd,
+  children,
+  tone = "green",
+}: {
+  title: string;
+  total: number;
+  collapsed: boolean;
+  onToggle: () => void;
+  onAdd: () => void;
+  children: ReactNode;
+  tone?: "green" | "red";
+}) {
+  return (
+    <section>
+      <div className="group flex items-center gap-2 px-3">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[11px] font-medium uppercase tracking-[0.08em] text-[#8B90B0] hover:text-white"
+        >
+          <ChevronDown
+            className={`h-3 w-3 shrink-0 transition ${collapsed ? "-rotate-90" : ""}`}
+          />
+          <span className="truncate">{title}</span>
+        </button>
+        <span
+          className={`shrink-0 text-[11px] tabular-nums ${
+            tone === "red" && total < 0 ? "text-[#F5A598]" : "text-[#8B90B0]"
+          }`}
+        >
+          {formatJPY(total)}
+        </span>
+        <button
+          type="button"
+          onClick={onAdd}
+          aria-label="Add account"
+          className="rounded-md p-1 text-[#8B90B0] opacity-0 transition hover:bg-white/[0.06] hover:text-white group-hover:opacity-100"
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <AnimatePresence initial={false}>
+        {!collapsed && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="mt-1 overflow-hidden"
+          >
+            <div className="space-y-0.5">{children}</div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </section>
+  );
 }
 
-function SidebarAccountRow({ account, onClick, onEdit }: { account: Account; onClick: () => void; onEdit: (changes: Partial<Account>) => void }) {
+function SidebarAccountRow({
+  account,
+  onClick,
+  onEdit,
+}: {
+  account: Account;
+  onClick: () => void;
+  onEdit: (changes: Partial<Account>) => void;
+}) {
   const editAccount = () => {
     const name = window.prompt("Account name", account.name);
     if (!name) return;
     onEdit({ name });
   };
   const archiveAccount = () => onEdit({ isArchived: true } as Partial<Account>);
-  return <button type="button" onClick={onClick} onContextMenu={(event) => { event.preventDefault(); if (window.confirm("Edit this account? Choose Cancel to archive instead.")) editAccount(); else archiveAccount(); }} className="flex w-full min-w-0 items-center gap-2 rounded-2xl px-2 py-2 text-left text-sm hover:bg-white/8"><Tooltip><TooltipTrigger asChild><span className="min-w-0 flex-1 truncate text-white/70">{account.name}</span></TooltipTrigger><TooltipContent side="right">{account.name}</TooltipContent></Tooltip><span className={`ml-auto flex-shrink-0 text-right font-medium tabular-nums ${account.balanceYen < 0 ? "text-red-300" : "text-white"}`}>{formatJPY(account.balanceYen)}</span></button>;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        if (window.confirm("Edit this account? Choose Cancel to archive instead.")) editAccount();
+        else archiveAccount();
+      }}
+      className="flex h-8 w-full min-w-0 items-center gap-2 rounded-md px-3 text-left text-[13px] text-[#8B90B0] hover:bg-white/[0.06] hover:text-white"
+    >
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="min-w-0 flex-1 truncate">{account.name}</span>
+        </TooltipTrigger>
+        <TooltipContent side="right">{account.name}</TooltipContent>
+      </Tooltip>
+      <span
+        className={`shrink-0 text-right tabular-nums ${
+          account.balanceYen < 0 ? "text-[#F5A598]" : "text-white/90"
+        }`}
+      >
+        {formatJPY(account.balanceYen)}
+      </span>
+    </button>
+  );
 }
 
-function SidebarModalInput({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (value: string) => void; type?: string }) {
-  return <label className="block"><span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</span><input type={type} value={value} onChange={(event) => onChange(event.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-[#4A7CFF]" /></label>;
+function EmptySectionHint({ children }: { children: ReactNode }) {
+  return (
+    <p className="px-3 py-1.5 text-[11px] italic text-[#8B90B0]/70">{children}</p>
+  );
+}
+
+function SidebarModalInput({
+  label,
+  value,
+  onChange,
+  type = "text",
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  type?: string;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-[11px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">
+        {label}
+      </span>
+      <input
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-lg border border-[#E8E7E3] bg-white px-3 py-2 text-sm outline-none focus:border-[#4A7CFF]"
+      />
+    </label>
+  );
 }

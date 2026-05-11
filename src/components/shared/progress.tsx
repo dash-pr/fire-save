@@ -1,22 +1,73 @@
 import { cn } from "@/lib/utils";
 import type { ReactNode } from "react";
 
-export function ProgressBar({ value, className }: { value: number; className?: string }) {
+export function ProgressBar({
+  value,
+  className,
+  tone,
+  thick = false,
+}: {
+  value: number;
+  className?: string;
+  tone?: "auto" | "success" | "warning" | "primary";
+  thick?: boolean;
+}) {
   const clamped = Math.max(0, Math.min(100, value));
+  const resolved: "warning" | "primary" | "success" =
+    tone === "success"
+      ? "success"
+      : tone === "warning"
+      ? "warning"
+      : tone === "primary"
+      ? "primary"
+      : clamped >= 90
+      ? "success"
+      : clamped >= 50
+      ? "primary"
+      : "warning";
+  const color = {
+    success: "#4CAF82",
+    primary: "#4A7CFF",
+    warning: "#F5A623",
+  }[resolved];
   return (
-    <div className={cn("h-2 overflow-hidden rounded-full bg-slate-100", className)}>
-      <div className="h-full rounded-full bg-[#4CAF82]" style={{ width: `${clamped}%` }} />
+    <div
+      className={cn(
+        "overflow-hidden rounded-full bg-[#EEEDE9]",
+        thick ? "h-3" : "h-1.5",
+        className,
+      )}
+    >
+      <div
+        className="h-full rounded-full transition-[width,background-color] duration-[400ms] ease-out"
+        style={{ width: `${clamped}%`, backgroundColor: color }}
+      />
     </div>
   );
 }
 
-export function StatusPill({ tone, children }: { tone: "green" | "amber" | "red" | "blue" | "slate"; children: ReactNode }) {
+export function StatusPill({
+  tone,
+  children,
+}: {
+  tone: "green" | "amber" | "red" | "blue" | "slate";
+  children: ReactNode;
+}) {
   const tones = {
-    green: "bg-emerald-50 text-emerald-700 ring-emerald-200",
-    amber: "bg-amber-50 text-amber-700 ring-amber-200",
-    red: "bg-red-50 text-red-700 ring-red-200",
-    blue: "bg-blue-50 text-blue-700 ring-blue-200",
-    slate: "bg-slate-100 text-slate-700 ring-slate-200",
+    green: "text-[#2F7A58] bg-[#E8F5EE]",
+    amber: "text-[#8A5A10] bg-[#FBEFD9]",
+    red: "text-[#A32D27] bg-[#FBE5E3]",
+    blue: "text-[#2450B5] bg-[#E6EDFF]",
+    slate: "text-[#4B5563] bg-[#EEEDE9]",
   };
-  return <span className={cn("rounded-full px-2.5 py-1 text-xs font-semibold ring-1", tones[tone])}>{children}</span>;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-medium tabular-nums",
+        tones[tone],
+      )}
+    >
+      {children}
+    </span>
+  );
 }

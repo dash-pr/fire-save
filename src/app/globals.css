@@ -1,13 +1,43 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f5f4f0;
+  --background: #F5F4F0;
   --foreground: #111827;
+
+  --surface-canvas: #F5F4F0;
+  --surface-raised: #FFFFFF;
+  --surface-inset: #FAFAF8;
+  --surface-group: #EEEDE9;
+  --surface-skeleton: #E8E7E3;
+  --divider: #F0EFEB;
+
+  --sidebar-bg: #1C1F3A;
+  --sidebar-text-active: #FFFFFF;
+  --sidebar-text-muted: #8B90B0;
+
+  --accent-primary: #4A7CFF;
+  --accent-success: #4CAF82;
+  --accent-warning: #F5A623;
+  --accent-danger: #E5534B;
+
+  --text-primary: #111827;
+  --text-muted: #6B7280;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-canvas: var(--surface-canvas);
+  --color-surface: var(--surface-raised);
+  --color-surface-inset: var(--surface-inset);
+  --color-surface-group: var(--surface-group);
+  --color-divider: var(--divider);
+  --color-sidebar: var(--sidebar-bg);
+  --color-accent: var(--accent-primary);
+  --color-success: var(--accent-success);
+  --color-warning: var(--accent-warning);
+  --color-danger: var(--accent-danger);
+  --color-muted: var(--text-muted);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -16,12 +46,48 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  font-feature-settings: "ss01", "cv01";
 }
 
 * {
   box-sizing: border-box;
 }
 
-.tabular-nums {
+.tabular-nums,
+table,
+input[type="number"],
+input[inputmode="numeric"] {
   font-variant-numeric: tabular-nums;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+.eyebrow {
+  font-size: 0.6875rem;
+  line-height: 1rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.hide-spin::-webkit-outer-spin-button,
+.hide-spin::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
+}
+.hide-spin {
+  appearance: textfield;
+}
+
+.scroll-soft::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.scroll-soft::-webkit-scrollbar-thumb {
+  background: rgba(17, 24, 39, 0.12);
+  border-radius: 999px;
 }
