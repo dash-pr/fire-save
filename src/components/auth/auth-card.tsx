@@ -106,15 +106,18 @@ export function PrimaryButton({
   loading,
   disabled,
   type = "submit",
+  onClick,
 }: {
   children: ReactNode;
   loading?: boolean;
   disabled?: boolean;
   type?: "button" | "submit";
+  onClick?: () => void;
 }) {
   return (
     <button
       type={type}
+      onClick={onClick}
       disabled={disabled || loading}
       className="mt-5 flex h-11 w-full items-center justify-center rounded-lg bg-[#4A7CFF] text-sm font-medium text-white transition hover:bg-[#3A68E5] disabled:cursor-not-allowed disabled:opacity-60"
     >

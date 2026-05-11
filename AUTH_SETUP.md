@@ -67,7 +67,22 @@ No Prisma migration is needed in this phase. Later phases that actually *read* t
 
 If we ever decide to rename the column, that is a follow-up migration — out of scope here.
 
-## 4. Smoke-test checklist
+## 4. Test credential
+
+A canonical test account is defined in `scripts/create-test-user.ts`:
+
+- **Email:** `test@stashy.local`
+- **Password:** `Stashy-Test-2026!`
+
+Create it locally with:
+
+```bash
+npx tsx scripts/create-test-user.ts
+```
+
+The script uses the service role key to bypass email confirmation. It's idempotent — running it twice does nothing. Never run it against production.
+
+## 5. Smoke-test checklist
 
 Before calling the auth phase done, verify in production:
 

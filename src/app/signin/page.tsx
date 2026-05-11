@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -26,6 +26,14 @@ function authErrorMessage(raw: string | null | undefined): string | null {
 }
 
 export default function SignInPage() {
+  return (
+    <Suspense fallback={null}>
+      <SignInInner />
+    </Suspense>
+  );
+}
+
+function SignInInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const oauthErrorRaw = searchParams.get("error");

@@ -19,6 +19,7 @@ import {
 } from "recharts";
 import { Bot, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Pencil, Plus, SlidersHorizontal, Trash2, UploadCloud, X } from "lucide-react";
 import { Sidebar } from "@/components/layout/sidebar";
+import { WelcomeToast } from "@/components/app/welcome-toast";
 import { Card, MetricCard } from "@/components/shared/card";
 import { ProgressBar, StatusPill } from "@/components/shared/progress";
 import {
@@ -237,6 +238,7 @@ export default function AppShell(_props: { children?: ReactNode } = {}) {
 
   return (
     <div className="min-h-screen bg-[#F5F4F0] text-slate-900">
+      <WelcomeToast />
       <div className="flex">
         <Sidebar accounts={accountState} investments={investmentState} netWorthYen={netWorth.netWorthYen} activePage={activePage} onNavigate={(pageKey) => setActivePage(pageKey as PageKey)} onAddAccount={(account) => setAccountState((previous) => [...previous, account])} onEditAccount={(id, changes) => setAccountState((previous) => previous.map((account) => account.id === id ? { ...account, ...changes } : account))} onSelectAccount={(accountId) => { setTransactionAccountFilterIds([accountId]); setActivePage("transactions"); }} />
         <main className="min-w-0 flex-1 px-8 py-8">
