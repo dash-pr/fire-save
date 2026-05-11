@@ -211,6 +211,8 @@ export type ForecastInputs = {
   fatAnnualSpendYen?: Yen;
   swrBufferRate?: number;
   idecoMonthlyContributionYen?: Yen;
+  idecoPlanType?: "full" | "dc";
+  retirementResidenceTaxRate?: number;
   nisaAnnualLimitYen?: Yen;
   nisaLifetimeLimitYen?: Yen;
   taxableCapitalGainsTaxRate?: number;
@@ -220,7 +222,11 @@ export type ForecastInputs = {
   baseRealReturn?: number;
   bearRealReturn?: number;
   customRealReturn?: number;
+  customScenarioLabel?: string;
   activeScenario?: "bear" | "base" | "bull" | "custom";
+  // Scenario-specific mortgage rate paths (Bear +0.3%/y cap 4%, Base +0.15%/y cap 3%, Bull 0% cap 1.5%).
+  // If omitted, falls back to `mortgageRateAnnualIncrease` / `mortgageRateCap` for all scenarios.
+  scenarioMortgageRateGrowth?: Partial<Record<"bear" | "base" | "bull" | "custom", { annualIncrease: number; cap: number }>>;
   includePension?: boolean;
   pensionMonthlyYen?: Yen;
   includeMortgage?: boolean;

@@ -39,6 +39,7 @@ export type JapanProjectionRow = {
   iDeCoTaxSavingYen: Yen;
   homeLoanDeductionYen: Yen;
   withdrawalYen: Yen;
+  pensionOffsetYen: Yen;
   fireCrossed: boolean;
   inBridge: boolean;
   phaseLabel?: string;
@@ -192,9 +193,16 @@ export function runJapanFireProjection(inputs: ForecastInputs, scenario: JapanSc
   const nisaAnnualLimitYen = inputs.nisaAnnualLimitYen ?? NISA_ANNUAL_LIMIT_YEN;
   const nisaLifetimeLimitYen = inputs.nisaLifetimeLimitYen ?? NISA_LIFETIME_LIMIT_YEN;
   const swrBufferRate = inputs.swrBufferRate ?? 0.15;
-  const leanTargetYen = Math.round(annualSpend(inputs, "lean") / Math.max(0.001, inputs.safeWithdrawalRate));
-  const regularTargetYen = Math.round((annualSpend(inputs, "regular") / Math.max(0.001, inputs.safeWithdrawalRate)) * (1 + swrBufferRate));
-  const preTaxFatFireNumberYen = Math.round((annualSpend(inputs, "fat") / Math.max(0.001, inputs.safeWithdrawalRate)) * (1 + swrBufferRate));
+  // FIRE target now includes a flat estimate of post-retirement residence tax (~5%
+  // of FAT spend), matching the reference's `totalExpenses + residenceTax` formula.
+  // Reference: simulation.js:298-301.
+  const retirementResidenceTaxRate = inputs.retirementResidenceTaxRate ?? 0.05;
+  const leanWithTax = annualSpend(inputs, "lean") * (1 + retirementResidenceTaxRate);
+  const regularWithTax = annualSpend(inputs, "regular") * (1 + retirementResidenceTaxRate);
+  const fatWithTax = annualSpend(inputs, "fat") * (1 + retirementResidenceTaxRate);
+  const leanTargetYen = Math.round(leanWithTax / Math.max(0.001, inputs.safeWithdrawalRate));
+  const regularTargetYen = Math.round((regularWithTax / Math.max(0.001, inputs.safeWithdrawalRate)) * (1 + swrBufferRate));
+  const preTaxFatFireNumberYen = Math.round((fatWithTax / Math.max(0.001, inputs.safeWithdrawalRate)) * (1 + swrBufferRate));
   const postTaxFatFireNumberYen = Math.round(preTaxFatFireNumberYen / (1 - taxableCapitalGainsTaxRate));
   const yearsToTarget = Math.max(1, inputs.targetRetirementAge - startAge);
   const coastFireNumberYen = Math.round(preTaxFatFireNumberYen / Math.pow(1 + Math.max(0.001, realReturn), yearsToTarget));
@@ -204,8 +212,19 @@ export function runJapanFireProjection(inputs: ForecastInputs, scenario: JapanSc
   const propertyValueYen = inputs.propertyValueYen ?? 100_000_000;
   const mortgageTermYears = inputs.mortgageTermYears ?? 35;
   const baseMortgageRate = inputs.mortgageInterestRate ?? 0.015;
-  const mortgageRateAnnualIncrease = inputs.mortgageRateAnnualIncrease ?? 0.0015;
-  const mortgageRateCap = inputs.mortgageRateCap ?? 0.03;
+  // Scenario-specific mortgage rate paths (reference: Bear +0.3%/y cap 4%,
+  // Base +0.15%/y cap 3%, Bull flat cap 1.5%). Falls back to the single-path
+  // inputs for the currently unsupplied scenario.
+  const scenarioMortgageDefaults: Record<JapanScenarioKey, { annualIncrease: number; cap: number }> = {
+    bear: { annualIncrease: 0.003, cap: 0.04 },
+    base: { annualIncrease: 0.0015, cap: 0.03 },
+    bull: { annualIncrease: 0, cap: 0.015 },
+    custom: { annualIncrease: inputs.mortgageRateAnnualIncrease ?? 0.0015, cap: inputs.mortgageRateCap ?? 0.03 },
+  };
+  const scenarioOverride = inputs.scenarioMortgageRateGrowth?.[scenario];
+  const mortgageRateAnnualIncrease = scenarioOverride?.annualIncrease
+    ?? scenarioMortgageDefaults[scenario].annualIncrease;
+  const mortgageRateCap = scenarioOverride?.cap ?? scenarioMortgageDefaults[scenario].cap;
   const lifeEvents = inputs.lifeEvents ?? [];
 
   let iDeCo = inputs.currentIDeCoYen ?? 0;
@@ -275,8 +294,13 @@ export function runJapanFireProjection(inputs: ForecastInputs, scenario: JapanSc
 
     if (!fireCrossed && contributionYen > 0) {
       let annualContribution = contributionYen * 12;
+      // DC-plan members have a lower iDeCo cap (¥12k/mo) than standard employees (¥23k/mo).
+      // Reference: simulation.js:248, constants.js:108.
+      const idecoMonthlyCap = inputs.idecoPlanType === "dc"
+        ? 12_000
+        : (inputs.idecoMonthlyContributionYen ?? 23_000);
       if (taxWrapperMode === "split" || taxWrapperMode === "ideco") {
-        iDeCoContributionYen = taxWrapperMode === "ideco" ? annualContribution : Math.min(annualContribution, (inputs.idecoMonthlyContributionYen ?? 23_000) * 12);
+        iDeCoContributionYen = taxWrapperMode === "ideco" ? annualContribution : Math.min(annualContribution, idecoMonthlyCap * 12);
         annualContribution -= iDeCoContributionYen;
       }
       if (taxWrapperMode === "split" || taxWrapperMode === "nisa") {
@@ -290,9 +314,18 @@ export function runJapanFireProjection(inputs: ForecastInputs, scenario: JapanSc
     }
 
     const phase = activePhase(inputs, age);
+    let actualWithdrawalYen = 0;
+    let pensionOffsetAppliedYen = 0;
     if (age >= inputs.targetRetirementAge) {
-      const pensionOffsetYen = inputs.includePension && age >= 65 ? ((inputs.pensionMonthlyYen ?? 175_000) * 12) / deflator : 0;
-      let withdrawalYen = Math.max(0, (totalMonthlyExpensesYen + residenceTaxYen) * 12 * (phase?.multiplier ?? 1) - pensionOffsetYen);
+      // Nenkin (Japanese public pension) reduces the required private-portfolio
+      // withdrawal from age 65 onward, extending portfolio life.
+      const pensionOffsetYen = inputs.includePension && age >= 65
+        ? ((inputs.pensionMonthlyYen ?? 175_000) * 12) / deflator
+        : 0;
+      pensionOffsetAppliedYen = pensionOffsetYen;
+      const grossWithdrawalYen = (totalMonthlyExpensesYen + residenceTaxYen) * 12 * (phase?.multiplier ?? 1);
+      let withdrawalYen = Math.max(0, grossWithdrawalYen - pensionOffsetYen);
+      actualWithdrawalYen = withdrawalYen;
       const fromTaxable = Math.min(taxable, withdrawalYen);
       taxable -= fromTaxable;
       withdrawalYen -= fromTaxable;
@@ -348,9 +381,14 @@ export function runJapanFireProjection(inputs: ForecastInputs, scenario: JapanSc
       nisaContributionYen: Math.round(nisaContributionYen / 12),
       taxableContributionYen: Math.round(taxableContributionYen / 12),
       nisaLifetimeUsedYen: yen(nisaLifetimeUsed),
-      iDeCoTaxSavingYen: Math.round((inputs.idecoMonthlyContributionYen ?? 23_000) * 12 * iDeCoMarginalRate(netMonthlyIncomeYen)),
+      iDeCoTaxSavingYen: Math.round(
+        (inputs.idecoPlanType === "dc" ? 12_000 : (inputs.idecoMonthlyContributionYen ?? 23_000)) *
+        12 *
+        iDeCoMarginalRate(netMonthlyIncomeYen),
+      ),
       homeLoanDeductionYen,
-      withdrawalYen: age >= inputs.targetRetirementAge ? yen((totalMonthlyExpensesYen + residenceTaxYen) * 12 * (phase?.multiplier ?? 1)) : 0,
+      withdrawalYen: yen(actualWithdrawalYen),
+      pensionOffsetYen: yen(pensionOffsetAppliedYen),
       fireCrossed,
       inBridge,
       phaseLabel: phase?.label,
