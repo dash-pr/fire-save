@@ -26,6 +26,7 @@ export async function POST(request: Request, context: RouteContext) {
     goal: {
       id: result.goal.id,
       categoryId: result.goal.categoryId ?? undefined,
+      fundingAccountId: result.goal.fundingAccountId ?? undefined,
       emoji: result.goal.emoji,
       name: result.goal.name,
       currentSavedYen: result.goal.currentSavedYen,

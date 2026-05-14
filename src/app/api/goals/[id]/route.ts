@@ -3,11 +3,12 @@ import { prisma } from "@/lib/prisma";
 import type { SavingsGoal } from "@/domain/types";
 
 type RouteContext = { params: Promise<{ id: string }> };
-type GoalBody = Partial<Pick<SavingsGoal, "name" | "emoji" | "targetAmountYen" | "targetDate" | "notes" | "categoryId">> & { month?: string };
+type GoalBody = Partial<Pick<SavingsGoal, "name" | "emoji" | "targetAmountYen" | "targetDate" | "notes" | "categoryId" | "fundingAccountId">> & { month?: string };
 
 function serializeGoal(goal: {
   id: string;
   categoryId: string | null;
+  fundingAccountId: string | null;
   emoji: string;
   name: string;
   currentSavedYen: number;
@@ -19,6 +20,7 @@ function serializeGoal(goal: {
   return {
     id: goal.id,
     categoryId: goal.categoryId ?? undefined,
+    fundingAccountId: goal.fundingAccountId ?? undefined,
     emoji: goal.emoji,
     name: goal.name,
     currentSavedYen: goal.currentSavedYen,
@@ -45,6 +47,7 @@ export async function PUT(request: Request, context: RouteContext) {
       targetAmountYen: body.targetAmountYen === undefined ? undefined : Math.round(body.targetAmountYen),
       targetDate: body.targetDate ? new Date(`${body.targetDate}T00:00:00`) : undefined,
       categoryId: body.categoryId,
+      fundingAccountId: body.fundingAccountId === undefined ? undefined : (body.fundingAccountId || null),
     },
   });
 
