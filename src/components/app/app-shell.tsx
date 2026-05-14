@@ -28,6 +28,7 @@ import { Card, MetricCard } from "@/components/shared/card";
 import { ProgressBar, StatusPill } from "@/components/shared/progress";
 import { nisaContributions } from "@/data/sample-data";
 import { buildBudgetRows, calculateActivityYen, calculateReadyToAssignYen, calculateSavingsRate, sortBudgetRowsByActivity, suggestedMonthlyForGoal } from "@/domain/budget";
+import { buildCardCycleBreakdown } from "@/domain/cardPayments";
 import { calculateBunkatsuRemaining, calculateDebtSummary, calculateRiboPayoff, normalizeInterestRate } from "@/domain/debt";
 import {
   calculateAgeFromDob,
@@ -53,11 +54,12 @@ import {
   TooltipTrigger as JpTooltipTrigger,
 } from "@/components/ui/tooltip";
 
-type PageKey = "home" | "budget" | "transactions" | "debt" | "goals" | "investments" | "forecast" | "reports" | "import" | "settings";
+type PageKey = "home" | "budget" | "accounts" | "transactions" | "debt" | "goals" | "investments" | "forecast" | "reports" | "import" | "settings";
 
 const pageTitles: Record<PageKey, { title: string; subtitle: string }> = {
   home: { title: "Financial Overview", subtitle: "A concise operating view for this month, focused on decisions that need attention." },
   budget: { title: "Monthly Budget", subtitle: "Assign income to categories, review activity, and keep available balances accurate." },
+  accounts: { title: "Accounts", subtitle: "Cash, virtual savings buckets, and credit card balances at a glance — with the next debit date for each card." },
   transactions: { title: "Transaction Review", subtitle: "Review spending, identify uncategorized activity, and prepare imports for categorization." },
   debt: { title: "Debt Payoff Plan", subtitle: "Track ribo-barai, bunkatsu-barai, and upcoming ikkatsu liabilities with editable assumptions." },
   goals: { title: "Savings Goals", subtitle: "Monitor goal funding and monthly allocations that feed the budget." },
@@ -104,7 +106,7 @@ function weekOfMonth(date: string): string {
   return `Week ${Math.ceil(day / 7)}`;
 }
 
-const PAGE_KEYS: PageKey[] = ["home", "budget", "transactions", "debt", "goals", "investments", "forecast", "reports", "import", "settings"];
+const PAGE_KEYS: PageKey[] = ["home", "budget", "accounts", "transactions", "debt", "goals", "investments", "forecast", "reports", "import", "settings"];
 
 function pathnameToPageKey(pathname: string | null): PageKey {
   if (!pathname) return "budget";
@@ -552,6 +554,8 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
 
           {activePage === "budget" && <BudgetPage month={selectedMonth} setMonth={openBudgetMonth} incomeEntries={currentIncomeEntries} setIncomeEntries={persistIncomeEntries} readyToAssignYen={readyToAssignYen} budgetRows={visibleBudgetRows} fullBudgetRows={budgetRows} budgetFilter={budgetFilter} setBudgetFilter={setBudgetFilter} categoryGroups={categoryGroupState} categoryList={activeCategories} setCategories={persistCategories} transactions={ruledTransactions} setTransactions={setTransactionState} budgetNotice={budgetNotice} estimatedAssignments={estimatedAssignments} setAssignment={persistAssignment} assignments={assignments} goals={goalState} setGoals={persistGoals} />}
 
+          {activePage === "accounts" && <AccountsPage accounts={accountState} debts={debtState} goals={goalState} investments={investmentState} transactions={transactionState} onSelectAccount={(accountId) => { setTransactionAccountFilterIds([accountId]); setActivePage("transactions"); }} />}
+
           {activePage === "transactions" && <TransactionsPage key={`${transactionAccountFilterIds.join(",")}:${transactionCategoryFilterIds.join(",")}`} month={selectedMonth} setMonth={setSelectedMonth} transactions={ruledTransactions} rawTransactions={transactionState} setTransactions={setTransactionState} incomeEntries={incomeEntryState} accounts={accountState} categories={activeCategories} merchantRules={merchantRuleState} setMerchantRules={setMerchantRuleState} initialAccountIds={transactionAccountFilterIds} initialCategoryIds={transactionCategoryFilterIds} />}
           {activePage === "debt" && <DebtPage month={selectedMonth} debts={debtState} setDebts={setDebtState} totalMonthlyObligationYen={debtSummary.totalMonthlyObligationYen} totalOutstandingYen={debtSummary.totalOutstandingYen} categoryGroups={categoryGroupState} categories={activeCategories} setCategories={persistCategories} transactions={transactionState} setTransactions={setTransactionState} />}
           {activePage === "goals" && <GoalsPage month={selectedMonth} goals={goalState} setGoals={persistGoals} assignments={assignments} setCategories={persistCategories} transactions={transactionState} setTransactions={setTransactionState} setAssignment={persistAssignment} accounts={accountState} />}
@@ -564,6 +568,160 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
       </div>
     </div>
     </JpTooltipProvider>
+  );
+}
+
+function AccountsPage({ accounts, debts, goals, investments, transactions, onSelectAccount }: {
+  accounts: Account[];
+  debts: CreditDebt[];
+  goals: SavingsGoal[];
+  investments: Investment[];
+  transactions: Transaction[];
+  onSelectAccount: (accountId: string) => void;
+}) {
+  const visibleAccounts = accounts.filter((account) => !account.isArchived);
+  const cashAccounts = visibleAccounts.filter((account) => account.type === "checking" || account.type === "savings");
+  const cardAccounts = visibleAccounts.filter((account) => account.type === "credit");
+
+  // Per-account goal claims so we can show usable vs total.
+  const goalClaimsByAccount = new Map<string, number>();
+  goals.forEach((goal) => {
+    if (!goal.fundingAccountId || goal.currentSavedYen <= 0) return;
+    goalClaimsByAccount.set(goal.fundingAccountId, (goalClaimsByAccount.get(goal.fundingAccountId) ?? 0) + goal.currentSavedYen);
+  });
+  const goalsByAccount = new Map<string, SavingsGoal[]>();
+  goals.forEach((goal) => {
+    if (!goal.fundingAccountId) return;
+    goalsByAccount.set(goal.fundingAccountId, [...(goalsByAccount.get(goal.fundingAccountId) ?? []), goal]);
+  });
+
+  const totalCashYen = cashAccounts.reduce((s, a) => s + a.balanceYen, 0);
+  const totalUsableYen = cashAccounts.reduce((s, a) => s + (a.balanceYen - (goalClaimsByAccount.get(a.id) ?? 0)), 0);
+  const totalReservedYen = cashAccounts.reduce((s, a) => s + (goalClaimsByAccount.get(a.id) ?? 0), 0);
+  const totalCardOutstandingYen = cardAccounts.reduce((s, a) => s + Math.abs(a.balanceYen), 0);
+  const totalInvestmentsYen = investments.reduce((s, i) => s + i.currentBalanceYen, 0);
+
+  return (
+    <div className="space-y-4">
+      <section className="grid gap-4 xl:grid-cols-3">
+        <MetricCard label="Cash usable" value={formatJPY(totalUsableYen)} detail={`${formatJPY(totalCashYen)} total · ${formatJPY(totalReservedYen)} in goals`} tone={totalUsableYen > 0 ? "blue" : "amber"} />
+        <MetricCard label="Credit cards owed" value={formatJPY(totalCardOutstandingYen)} detail={`${cardAccounts.length} cards · next debit ${(() => {
+          const earliest = cardAccounts.map((c) => buildCardCycleBreakdown({ card: c, debts, transactions }).dueDate).sort()[0];
+          if (!earliest) return "—";
+          const date = new Date(`${earliest}T00:00:00`);
+          return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(date);
+        })()}`} tone={totalCardOutstandingYen > 0 ? "red" : "neutral"} />
+        <MetricCard label="Investments" value={formatJPY(totalInvestmentsYen)} detail={`${investments.length} accounts`} />
+      </section>
+
+      <Card title="Cash & savings" eyebrow="Real bank accounts">
+        {cashAccounts.length === 0 ? (
+          <EmptyHint>No cash accounts yet.</EmptyHint>
+        ) : (
+          <ul className="divide-y divide-[#F0EFEB]">
+            {cashAccounts.map((account) => {
+              const claim = goalClaimsByAccount.get(account.id) ?? 0;
+              const usable = account.balanceYen - claim;
+              const goalsHere = goalsByAccount.get(account.id) ?? [];
+              const { primary, secondary } = getAccountDisplayNames(account.name);
+              return (
+                <li key={account.id} className="py-3 first:pt-0 last:pb-0">
+                  <button type="button" onClick={() => onSelectAccount(account.id)} className="group flex w-full items-start justify-between gap-4 text-left transition hover:bg-[#FAFAF8] -mx-2 px-2 py-1 rounded-md">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-slate-900">{primary}</p>
+                      {secondary && <p className="text-[11px] text-[#6B7280] opacity-80">{secondary}</p>}
+                      {goalsHere.length > 0 && (
+                        <p className="mt-1.5 text-[11px] text-[#6B7280]">
+                          Backing {goalsHere.length} {goalsHere.length === 1 ? "goal" : "goals"}: {goalsHere.map((g) => `${g.emoji} ${g.name}`).join(" · ")}
+                        </p>
+                      )}
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className={`text-base font-medium tabular-nums ${usable < 0 ? "text-[#E5534B]" : "text-slate-900"}`}>{formatJPY(usable)}</p>
+                      {claim > 0 && (
+                        <p className="text-[11px] tabular-nums text-[#6B7280]">Total {formatJPY(account.balanceYen)} · {formatJPY(claim)} reserved</p>
+                      )}
+                    </div>
+                  </button>
+                  {goalsHere.length > 0 && (
+                    <ul className="mt-2 ml-4 space-y-0.5 border-l border-[#F0EFEB] pl-3">
+                      {goalsHere.map((goal) => {
+                        const progress = goal.targetAmountYen > 0 ? Math.round((goal.currentSavedYen / goal.targetAmountYen) * 100) : 0;
+                        return (
+                          <li key={goal.id} className="flex items-baseline justify-between gap-2 text-[12px]">
+                            <span className="min-w-0 truncate text-[#6B7280]">{goal.emoji} {goal.name}<span className="ml-2 text-[10px] text-[#9CA3AF]">{progress}% of {formatJPY(goal.targetAmountYen)}</span></span>
+                            <span className="shrink-0 tabular-nums text-slate-700">{formatJPY(goal.currentSavedYen)}</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </Card>
+
+      <Card title="Credit cards" eyebrow="Outstanding & next debit">
+        {cardAccounts.length === 0 ? (
+          <EmptyHint>No credit cards yet.</EmptyHint>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-[#F0EFEB] text-[10px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">
+                <th className="pb-2 pr-4 text-left">Card</th>
+                <th className="pb-2 pr-4 text-right">Outstanding</th>
+                <th className="pb-2 pr-4 text-right">Next debit</th>
+                <th className="pb-2 pr-0 text-right">Due</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cardAccounts.map((account) => {
+                const cycle = buildCardCycleBreakdown({ card: account, debts, transactions });
+                const dueDate = new Date(`${cycle.dueDate}T00:00:00`);
+                const dueLabel = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(dueDate);
+                const { primary, secondary } = getAccountDisplayNames(account.name);
+                return (
+                  <tr key={account.id} className="border-b border-[#F0EFEB] last:border-b-0 transition hover:bg-[#FAFAF8]">
+                    <td className="py-2 pr-4">
+                      <button type="button" onClick={() => onSelectAccount(account.id)} className="text-left">
+                        <p className="text-sm text-slate-900">{primary}</p>
+                        {secondary && <p className="text-[11px] text-[#6B7280] opacity-80">{secondary}</p>}
+                      </button>
+                    </td>
+                    <td className={`py-2 pr-4 text-right text-sm font-medium tabular-nums ${account.balanceYen < 0 ? "text-[#E5534B]" : "text-slate-900"}`}>{formatJPY(Math.abs(account.balanceYen))}</td>
+                    <td className="py-2 pr-4 text-right text-sm tabular-nums text-slate-900">{cycle.totalDueYen > 0 ? formatJPY(cycle.totalDueYen) : "—"}</td>
+                    <td className="py-2 pr-0 text-right">
+                      <span className="text-sm tabular-nums text-slate-900">{dueLabel}</span>
+                      <span className="ml-1.5 text-[10px] text-[#6B7280]">{cycle.daysUntilDue === 0 ? "today" : `${cycle.daysUntilDue}d`}</span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      <Card title="Investments" eyebrow="Long-term wrappers">
+        {investments.length === 0 ? (
+          <EmptyHint>No investment accounts tracked yet.</EmptyHint>
+        ) : (
+          <ul className="divide-y divide-[#F0EFEB]">
+            {investments.map((investment) => (
+              <li key={investment.id} className="flex items-center justify-between gap-4 py-3 first:pt-0 last:pb-0">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-slate-900">{investment.accountName}</p>
+                  <p className="text-[11px] text-[#6B7280]">{formatInvestmentSubtype(investment.accountSubtype)}</p>
+                </div>
+                <p className="shrink-0 text-base font-medium tabular-nums text-slate-900">{formatJPY(investment.currentBalanceYen)}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    </div>
   );
 }
 

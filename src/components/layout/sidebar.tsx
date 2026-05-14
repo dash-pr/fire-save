@@ -7,6 +7,7 @@ import {
   CreditCard,
   Flag,
   Home,
+  Landmark,
   LineChart,
   Plus,
   ReceiptText,
@@ -24,6 +25,7 @@ import { UserMenu, type AppUser } from "@/components/app/user-menu";
 const nav = [
   { key: "home", label: "Home", icon: Home },
   { key: "budget", label: "Budget", icon: WalletCards },
+  { key: "accounts", label: "Accounts", icon: Landmark },
   { key: "transactions", label: "Transactions", icon: ReceiptText },
   { key: "debt", label: "Debt", icon: CreditCard },
   { key: "goals", label: "Goals", icon: Target },
