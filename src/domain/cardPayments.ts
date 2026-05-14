@@ -10,16 +10,17 @@ import type { Account, CreditDebt, Transaction, Yen } from "./types";
  * spaces). `cardKey` is the substring we then look for in the matching credit Account's name.
  */
 const CARD_PAYMENT_PATTERNS: Array<{ pattern: RegExp; cardKey: string }> = [
-  { pattern: /paypay/i,       cardKey: "PayPay" },
-  { pattern: /paypayカ/i,     cardKey: "PayPay" },
-  { pattern: /ミツイスミトモ|smbc|三井住友/i, cardKey: "SMBC" },
-  { pattern: /三井住友/i,     cardKey: "三井住友" },
-  { pattern: /df.ペイデイ|df\.peidei|paidy.*apple|apple.*paidy/i, cardKey: "Apple" },
-  { pattern: /paidy/i,        cardKey: "Paidy" },
-  { pattern: /jcb/i,           cardKey: "JCB" },
-  { pattern: /セゾン|saison|amex|アメックス/i, cardKey: "セゾン" },
-  { pattern: /メルカリ|mercari/i, cardKey: "メルカリ" },
-  { pattern: /楽天/i,          cardKey: "楽天" },
+  { pattern: /paypay/i,                                          cardKey: "PayPay" },
+  // SMBC quo-card line is itemized separately on Yucho — keep this above the generic SMBC match.
+  { pattern: /スミトモc.*クオ|スミトモc\(クオ/i,                cardKey: "三井住友" },
+  { pattern: /df\.ペイデイ|df\.peidei|paidy.*apple|apple.*paidy/i, cardKey: "Apple" },
+  { pattern: /paidy/i,                                            cardKey: "Paidy" },
+  { pattern: /jcb/i,                                              cardKey: "JCB" },
+  { pattern: /セゾン|saison|amex|アメックス/i,                   cardKey: "セゾン" },
+  { pattern: /メルカリ|mercari|メルペイ/i,                       cardKey: "メルカリ" },
+  // Cover both kanji and katakana spellings of Rakuten — MoneyForward exports use katakana.
+  { pattern: /楽天|ラクテン/i,                                    cardKey: "楽天" },
+  { pattern: /ミツイスミトモ|smbc|三井住友/i,                    cardKey: "三井住友" },
 ];
 
 export function matchSettlementToCard(payee: string, cards: Account[]): Account | null {
