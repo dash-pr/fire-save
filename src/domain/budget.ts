@@ -1,4 +1,4 @@
-import type { BudgetAssignment, BudgetRow, BudgetStatus, Category, Transaction, Yen } from "./types";
+import type { BudgetAssignment, BudgetRow, BudgetStatus, Category, SavingsGoal, Transaction, Yen } from "./types";
 
 export function getMonthKey(date: string | Date): string {
   const value = typeof date === "string" ? new Date(`${date}T00:00:00`) : date;
@@ -34,7 +34,9 @@ export function buildBudgetRows(args: {
   assignments: BudgetAssignment[];
   transactions: Transaction[];
   month: string;
+  goals?: SavingsGoal[];
 }): BudgetRow[] {
+  const goalsByCategoryId = new Map((args.goals ?? []).filter((goal) => goal.categoryId).map((goal) => [goal.categoryId!, goal]));
   return args.categories.map((category) => {
     const assignment = args.assignments.find(
       (item) => item.categoryId === category.id && item.month === args.month,
@@ -43,12 +45,26 @@ export function buildBudgetRows(args: {
     const activityYen = calculateActivityYen(args.transactions, category.id, args.month);
     const availableYen = calculateAvailableYen(assignedYen, activityYen);
 
+    // Goal-linked rows have different status semantics: there is no "spend" — only assignment.
+    // The row is "funded" if the goal is complete OR the assignment meets the suggested target;
+    // "underfunded" only when the user assigned less than the suggested amount.
+    let status: BudgetStatus = getBudgetStatus(assignedYen, activityYen, availableYen);
+    const goal = goalsByCategoryId.get(category.id);
+    if (goal) {
+      const isComplete = Boolean(goal.completedAt) || goal.currentSavedYen >= goal.targetAmountYen;
+      if (isComplete || assignedYen >= suggestedMonthlyForGoal(goal, args.month)) {
+        status = "funded";
+      } else {
+        status = "underfunded";
+      }
+    }
+
     return {
       category,
       assignedYen,
       activityYen,
       availableYen,
-      status: getBudgetStatus(assignedYen, activityYen, availableYen),
+      status,
       isManuallySet: assignment?.isManuallySet ?? false,
     };
   });
@@ -73,4 +89,27 @@ export function filterBudgetRows(rows: BudgetRow[], filter: "all" | BudgetStatus
 export function calculateSavingsRate(totalIncomeYen: Yen, totalExpenseYen: Yen): number {
   if (totalIncomeYen <= 0) return 0;
   return (totalIncomeYen - totalExpenseYen) / totalIncomeYen;
+}
+
+/**
+ * Months from `currentMonth` (YYYY-MM) up to and including `targetDate` (YYYY-MM-DD).
+ * Returns at least 1 — a goal whose target date is this month still needs one funding round.
+ */
+export function monthsUntilTarget(currentMonth: string, targetDate: string): number {
+  const [fy, fm] = currentMonth.split("-").map(Number);
+  const target = new Date(targetDate);
+  if (Number.isNaN(target.getTime())) return 1;
+  return Math.max(1, (target.getFullYear() - fy) * 12 + (target.getMonth() + 1 - fm));
+}
+
+/**
+ * The default monthly assignment for a goal. Computed as the still-needed amount divided by the
+ * months remaining, rounded *up* to the nearest ¥1,000 so the user gets a clean number that
+ * comfortably hits the target.
+ */
+export function suggestedMonthlyForGoal(goal: SavingsGoal, currentMonth: string): Yen {
+  const remaining = Math.max(0, goal.targetAmountYen - goal.currentSavedYen);
+  if (remaining === 0) return 0;
+  const months = monthsUntilTarget(currentMonth, goal.targetDate);
+  return Math.ceil(remaining / months / 1000) * 1000;
 }

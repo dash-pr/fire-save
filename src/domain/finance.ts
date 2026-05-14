@@ -12,8 +12,14 @@ export function calculateNetWorth(args: {
     .filter((account) => account.type === "credit")
     .reduce((total, account) => total + Math.abs(account.balanceYen), 0);
   const investmentAssets = args.investments.reduce((total, investment) => total + investment.currentBalanceYen, 0);
+  // When a debt is linked to a credit account, the account balance already reflects it.
+  // Counting both double-counts the liability — only sum standalone debts here.
+  const linkedAccountIds = new Set(args.accounts.filter((account) => account.type === "credit").map((account) => account.id));
+  const linkedAccountNames = new Set(args.accounts.filter((account) => account.type === "credit").map((account) => account.name));
   const debtLiabilities = args.debts
     .filter((debt) => !debt.isPaid)
+    .filter((debt) => !(debt.accountId && linkedAccountIds.has(debt.accountId)))
+    .filter((debt) => !linkedAccountNames.has(debt.cardName))
     .reduce((total, debt) => total + Math.max(debt.currentBalanceYen, 0), 0);
 
   const assetsYen = accountAssets + investmentAssets;
