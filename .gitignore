@@ -36,6 +36,7 @@ yarn-error.log*
 # personal financial import data
 stashy_import.json
 stashy_import_final.json
+stashy_import_v2.json
 
 # supabase local CLI state
 supabase/.branches/
