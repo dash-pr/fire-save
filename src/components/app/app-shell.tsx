@@ -172,9 +172,23 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
     }),
     [merchantRuleState, transactionState],
   );
+  // Map categoryId → projected next-debit total for cards. Drives the Budget Debt-Payments rows
+  // so the assignment auto-updates as cycle charges land or ribo balances shift.
+  const cardSuggestedByCategoryId = useMemo(() => {
+    const map = new Map<string, number>();
+    const cardAccounts = accountState.filter((a) => a.type === "credit" && !a.isArchived);
+    for (const card of cardAccounts) {
+      const cycle = buildCardCycleBreakdown({ card, debts: debtState, transactions: ruledTransactions });
+      const linkedDebts = debtState.filter((d) => !d.isPaid && (d.accountId === card.id || d.cardName === card.name));
+      for (const debt of linkedDebts) {
+        if (debt.categoryId) map.set(debt.categoryId, cycle.totalDueYen);
+      }
+    }
+    return map;
+  }, [accountState, debtState, ruledTransactions]);
   const budgetRows = useMemo(
-    () => buildBudgetRows({ categories: activeCategories, assignments, transactions: ruledTransactions, month: selectedMonth, goals: goalState }),
-    [activeCategories, assignments, selectedMonth, ruledTransactions, goalState],
+    () => buildBudgetRows({ categories: activeCategories, assignments, transactions: ruledTransactions, month: selectedMonth, goals: goalState, cardSuggestedByCategoryId }),
+    [activeCategories, assignments, selectedMonth, ruledTransactions, goalState, cardSuggestedByCategoryId],
   );
   const visibleBudgetRows = budgetRows.filter((row) => budgetFilter === "all" || row.status === budgetFilter);
   const readyToAssignYen = calculateReadyToAssignYen(incomeYen, assignments);
@@ -204,11 +218,16 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
       const next = { ...previous };
       const seen = new Set<string>();
       const goalCategoryIds = new Set(goalState.map((goal) => goal.categoryId).filter(Boolean) as string[]);
+      const cardCategoryIds = new Set(debtState.map((d) => d.categoryId).filter(Boolean) as string[]);
       ruledTransactions.forEach((transaction) => {
         if (transaction.type !== "debit" || !transaction.categoryId) return;
         // Goal-linked categories are funded via the goal auto-assign effect below — do not let
         // spend-based logic touch them (they normally have zero debit activity anyway).
         if (goalCategoryIds.has(transaction.categoryId)) return;
+        // Card-debt categories are driven by the cardSuggestedByCategoryId map in
+        // buildBudgetRows, which already projects ribo + cycle charges. Spend activity on a card
+        // category isn't meaningful — skip.
+        if (cardCategoryIds.has(transaction.categoryId)) return;
         const month = transaction.date.slice(0, 7);
         const key = budgetKey(month, transaction.categoryId);
         if (seen.has(key)) return;
@@ -223,7 +242,7 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
       });
       return changed ? next : previous;
     });
-  }, [ruledTransactions, goalState]);
+  }, [ruledTransactions, goalState, debtState]);
 
   // Goal auto-assign: for the current month's budget row of every goal-linked category, default
   // the assignment to the suggested-monthly amount. Skip fully-funded goals and respect manual
@@ -549,7 +568,7 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
 
           {activePage === "accounts" && <AccountsPage accounts={accountState} debts={debtState} goals={goalState} investments={investmentState} transactions={transactionState} onSelectAccount={(accountId) => { setTransactionAccountFilterIds([accountId]); setActivePage("transactions"); }} />}
 
-          {activePage === "transactions" && <TransactionsPage key={`${transactionAccountFilterIds.join(",")}:${transactionCategoryFilterIds.join(",")}`} month={selectedMonth} setMonth={setSelectedMonth} transactions={ruledTransactions} rawTransactions={transactionState} setTransactions={setTransactionState} incomeEntries={incomeEntryState} accounts={accountState} categories={activeCategories} merchantRules={merchantRuleState} setMerchantRules={setMerchantRuleState} initialAccountIds={transactionAccountFilterIds} initialCategoryIds={transactionCategoryFilterIds} debts={debtState} />}
+          {activePage === "transactions" && <TransactionsPage key={`${transactionAccountFilterIds.join(",")}:${transactionCategoryFilterIds.join(",")}`} month={selectedMonth} setMonth={setSelectedMonth} transactions={ruledTransactions} rawTransactions={transactionState} setTransactions={setTransactionState} incomeEntries={incomeEntryState} accounts={accountState} categories={activeCategories} merchantRules={merchantRuleState} setMerchantRules={setMerchantRuleState} initialAccountIds={transactionAccountFilterIds} initialCategoryIds={transactionCategoryFilterIds} debts={debtState} setDebts={setDebtState} />}
           {activePage === "debt" && <DebtPage month={selectedMonth} debts={debtState} setDebts={setDebtState} totalMonthlyObligationYen={debtSummary.totalMonthlyObligationYen} totalOutstandingYen={debtSummary.totalOutstandingYen} categoryGroups={categoryGroupState} categories={activeCategories} setCategories={persistCategories} transactions={transactionState} setTransactions={setTransactionState} accounts={accountState} />}
           {activePage === "goals" && <GoalsPage month={selectedMonth} goals={goalState} setGoals={persistGoals} assignments={assignments} setCategories={persistCategories} transactions={transactionState} setTransactions={setTransactionState} setAssignment={persistAssignment} accounts={accountState} />}
           {activePage === "investments" && <InvestmentsPage investments={investmentState} setInvestments={setInvestmentState} />}
@@ -986,7 +1005,7 @@ type TransactionLedgerRow = {
   source: Transaction["source"] | "income";
 };
 
-function TransactionsPage({ month, setMonth, transactions, rawTransactions, setTransactions, incomeEntries, accounts, categories, merchantRules, setMerchantRules, initialAccountIds, initialCategoryIds, debts }: { month: string; setMonth: (month: string) => void; transactions: Transaction[]; rawTransactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>>; incomeEntries: IncomeEntry[]; accounts: Account[]; categories: Category[]; merchantRules: MerchantRule[]; setMerchantRules: Dispatch<SetStateAction<MerchantRule[]>>; initialAccountIds: string[]; initialCategoryIds: string[]; debts: CreditDebt[] }) {
+function TransactionsPage({ month, setMonth, transactions, rawTransactions, setTransactions, incomeEntries, accounts, categories, merchantRules, setMerchantRules, initialAccountIds, initialCategoryIds, debts, setDebts }: { month: string; setMonth: (month: string) => void; transactions: Transaction[]; rawTransactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>>; incomeEntries: IncomeEntry[]; accounts: Account[]; categories: Category[]; merchantRules: MerchantRule[]; setMerchantRules: Dispatch<SetStateAction<MerchantRule[]>>; initialAccountIds: string[]; initialCategoryIds: string[]; debts: CreditDebt[]; setDebts: Dispatch<SetStateAction<CreditDebt[]>> }) {
   const [activeView, setActiveView] = useState<"all" | "card-payments">(() => {
     if (typeof window === "undefined") return "all";
     return window.location.hash === "#card-payments" ? "card-payments" : "all";
@@ -1163,6 +1182,25 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
     }
   };
 
+  const toggleRiboConversion = async (transaction: Transaction) => {
+    setInlineMessage(null);
+    const isUndo = Boolean(transaction.convertedToRiboAt);
+    try {
+      const response = await fetch(`/api/transactions/${transaction.id}/convert-to-ribo`, {
+        method: isUndo ? "DELETE" : "POST",
+      });
+      const payload = await response.json().catch(() => ({})) as { transaction?: Transaction; debt?: { id: string; currentBalanceYen: number }; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Failed to update ribo conversion.");
+      setTransactions((previous) => previous.map((item) => item.id === transaction.id ? { ...item, convertedToRiboAt: payload.transaction?.convertedToRiboAt } : item));
+      if (payload.debt) {
+        setDebts((previous) => previous.map((debt) => debt.id === payload.debt!.id ? { ...debt, currentBalanceYen: payload.debt!.currentBalanceYen } : debt));
+      }
+      setInlineMessage(isUndo ? `Reverted ${transaction.payee} from ribo.` : `Converted ${transaction.payee} (${formatJPY(transaction.amountYen)}) to ribo.`);
+    } catch (error) {
+      setInlineMessage(error instanceof Error ? error.message : "Failed to update ribo conversion.");
+    }
+  };
+
   const netYen = stats.totalIn - stats.totalOut;
   return (
     <div className="space-y-4">
@@ -1263,25 +1301,43 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
                 {grouped.map((group) => {
                   const subtotal = group.rows.reduce((total, transaction) => total + (transaction.type === "debit" ? -transaction.amountYen : transaction.amountYen), 0);
                   const isCollapsed = collapsed[group.key] ?? false;
+                  const accountIdsWithRibo = new Set(debts.filter((d) => !d.isPaid && d.type === "revolving" && d.accountId).map((d) => d.accountId!));
                   const content = group.rows.map((transaction) => {
                     const category = categories.find((c) => c.id === transaction.categoryId);
                     const originalTransaction = transaction.transaction;
+                    const canConvert = originalTransaction
+                      && originalTransaction.type === "debit"
+                      && accountIdsWithRibo.has(originalTransaction.accountId);
+                    const isConverted = Boolean(originalTransaction?.convertedToRiboAt);
                     return (
-                      <tr key={transaction.id} className={`group border-b border-[#F0EFEB] transition hover:bg-[#FAFAF8] ${transaction.kind === "income" || transaction.categoryId ? "" : "bg-[#FBEFD9]/40"}`}>
+                      <tr key={transaction.id} className={`group border-b border-[#F0EFEB] transition hover:bg-[#FAFAF8] ${isConverted ? "bg-[#FBE5E3]/30" : transaction.kind === "income" || transaction.categoryId ? "" : "bg-[#FBEFD9]/40"}`}>
                         <td className="py-2 pr-4 text-xs tabular-nums text-[#6B7280]">{transaction.date}</td>
                         <td className="py-2 pr-4">
                           <MerchantLabel payee={transaction.payee} memo={transaction.memo ?? null} />
+                          {isConverted && <span className="ml-1 inline-flex items-center rounded-full bg-[#FBE5E3] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.06em] text-[#A32D27]">ribo</span>}
                         </td>
                         <td className="py-2 pr-4 text-xs text-[#6B7280]">{transaction.kind === "income" ? "Income" : (() => { const acct = accounts.find((account) => account.id === transaction.accountId); return acct ? getAccountDisplayNames(acct.name).primary : "Unknown"; })()}</td>
                         <td className="py-2 pr-4">
                           {originalTransaction ? <CategoryPicker value={transaction.categoryId ?? ""} onChange={(value) => updateCategory(originalTransaction, value)} options={categories} currentName={category?.name} /> : <span className="rounded-full bg-[#E8F5EE] px-2.5 py-0.5 text-[11px] font-medium text-[#2F7A58]">Income</span>}
                         </td>
                         <td className="py-2 pr-4">
-                          {originalTransaction && <button type="button" onClick={() => addMerchantRule(originalTransaction)} disabled={savingTransactionIds[originalTransaction.id]} className="rounded-md px-2 py-0.5 text-[11px] font-medium text-[#6B7280] transition hover:bg-[#EEEDE9] hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50" title={`Always categorize ${transaction.payee} this way`}>{savingTransactionIds[originalTransaction.id] ? "Saving" : "Always"}</button>}
+                          <div className="flex items-center gap-1">
+                            {originalTransaction && <button type="button" onClick={() => addMerchantRule(originalTransaction)} disabled={savingTransactionIds[originalTransaction.id]} className="rounded-md px-2 py-0.5 text-[11px] font-medium text-[#6B7280] transition hover:bg-[#EEEDE9] hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50" title={`Always categorize ${transaction.payee} this way`}>{savingTransactionIds[originalTransaction.id] ? "Saving" : "Always"}</button>}
+                            {canConvert && (
+                              <button
+                                type="button"
+                                onClick={() => toggleRiboConversion(originalTransaction!)}
+                                className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition ${isConverted ? "bg-[#FBE5E3] text-[#A32D27] hover:bg-[#F5CBC7]" : "text-[#6B7280] opacity-0 hover:bg-[#FBE5E3] hover:text-[#A32D27] group-hover:opacity-100"}`}
+                                title={isConverted ? "Move this charge back into the cycle" : "Convert this charge into ribo (raises card revolving balance)"}
+                              >
+                                {isConverted ? "Undo ribo" : "→ Ribo"}
+                              </button>
+                            )}
+                          </div>
                         </td>
                         <td className={`py-2 pr-0 text-right text-sm tabular-nums ${transaction.type === "credit" ? "text-[#2F7A58]" : "text-[#E5534B]"}`}>
                           <div className="flex items-center justify-end gap-2">
-                            <span>{transaction.type === "credit" ? "+" : "−"}{formatJPY(transaction.amountYen)}</span>
+                            <span className={isConverted ? "line-through opacity-60" : ""}>{transaction.type === "credit" ? "+" : "−"}{formatJPY(transaction.amountYen)}</span>
                             <span className="inline-flex h-5 w-5 items-center justify-center">
                               {originalTransaction && (
                                 <button

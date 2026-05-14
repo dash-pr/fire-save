@@ -122,6 +122,7 @@ export async function loadAppInitialData(): Promise<AppInitialData> {
       amountYen: transaction.amountYen,
       type: transaction.type,
       source: transaction.source,
+      convertedToRiboAt: transaction.convertedToRiboAt?.toISOString(),
     }));
 
     return {

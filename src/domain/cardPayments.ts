@@ -261,10 +261,13 @@ export function buildCardCycleBreakdown(args: {
 
   const cycleStartIso = cycleStart.toISOString().slice(0, 10);
   const cycleEndIso = cycleEnd.toISOString().slice(0, 10);
+  // Charges that have been "converted to ribo" no longer count toward this cycle — their amount
+  // moved into the card's revolving balance, which is reflected via riboPrincipal.
   const cycleCharges = args.transactions
     .filter((t) => t.accountId === args.card.id)
     .filter((t) => t.type === "debit")
     .filter((t) => t.source !== "recurring")
+    .filter((t) => !t.convertedToRiboAt)
     .filter((t) => t.date >= cycleStartIso && t.date <= cycleEndIso);
 
   const revolving = cardDebts.filter((d) => d.type === "revolving");

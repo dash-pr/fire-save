@@ -23,6 +23,7 @@ function serializeTransaction(transaction: {
   amountYen: number;
   type: Transaction["type"];
   source: Transaction["source"];
+  convertedToRiboAt: Date | null;
 }): Transaction {
   return {
     id: transaction.id,
@@ -34,6 +35,7 @@ function serializeTransaction(transaction: {
     amountYen: transaction.amountYen,
     type: transaction.type,
     source: transaction.source,
+    convertedToRiboAt: transaction.convertedToRiboAt?.toISOString(),
   };
 }
 

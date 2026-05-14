@@ -40,6 +40,8 @@ export type Transaction = {
   amountYen: Yen;
   type: TransactionType;
   source: "manual" | "OCR" | "CSV" | "csv" | "pdf_smbc" | "pdf_jcb" | "pdf_saison" | "pdf_paidy" | "recurring";
+  /** ISO timestamp when the user converted this charge into the card's revolving balance. */
+  convertedToRiboAt?: string;
 };
 
 export type BudgetAssignment = {
