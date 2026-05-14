@@ -5,11 +5,19 @@ export function getMonthKey(date: string | Date): string {
   return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}`;
 }
 
+/**
+ * Card-settlement debits (自払, メルペイ wallet top-ups, カード引き落とし) are bank-to-card
+ * transfers, not real spending. They should never count as activity in any budget category, even
+ * if they get accidentally categorized.
+ */
+const SETTLEMENT_PAYEE = /^(自払|メルペイ$|チャージ\(?入金\)?)/;
+
 export function calculateActivityYen(transactions: Transaction[], categoryId: string, month: string): Yen {
   return transactions
     .filter((transaction) => transaction.categoryId === categoryId)
     .filter((transaction) => getMonthKey(transaction.date) === month)
     .filter((transaction) => transaction.type === "debit")
+    .filter((transaction) => !SETTLEMENT_PAYEE.test(transaction.payee))
     .reduce((total, transaction) => total + Math.abs(transaction.amountYen), 0);
 }
 
@@ -35,13 +43,22 @@ export function buildBudgetRows(args: {
   transactions: Transaction[];
   month: string;
   goals?: SavingsGoal[];
+  /** categoryId → suggested monthly debit (ribo + non-ribo cycle charges + interest) for cards. */
+  cardSuggestedByCategoryId?: Map<string, Yen>;
 }): BudgetRow[] {
   const goalsByCategoryId = new Map((args.goals ?? []).filter((goal) => goal.categoryId).map((goal) => [goal.categoryId!, goal]));
   return args.categories.map((category) => {
     const assignment = args.assignments.find(
       (item) => item.categoryId === category.id && item.month === args.month,
     );
-    const assignedYen = assignment?.assignedYen ?? 0;
+    const cardSuggested = args.cardSuggestedByCategoryId?.get(category.id);
+    // Card-debt rows: when the user hasn't manually set a value, the assigned amount tracks the
+    // card's projected next-debit total (ribo monthly + cycle charges + interest). It moves
+    // automatically as new transactions land or as ribo balances change.
+    const isManuallySet = assignment?.isManuallySet ?? false;
+    const assignedYen = cardSuggested !== undefined && !isManuallySet
+      ? cardSuggested
+      : assignment?.assignedYen ?? 0;
     const activityYen = calculateActivityYen(args.transactions, category.id, args.month);
     const availableYen = calculateAvailableYen(assignedYen, activityYen);
 
@@ -65,7 +82,7 @@ export function buildBudgetRows(args: {
       activityYen,
       availableYen,
       status,
-      isManuallySet: assignment?.isManuallySet ?? false,
+      isManuallySet,
     };
   });
 }
