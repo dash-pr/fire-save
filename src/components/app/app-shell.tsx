@@ -716,15 +716,24 @@ function isDebtDueSoon(debt: CreditDebt): boolean {
   return daysUntilDue >= 0 && daysUntilDue <= 5;
 }
 
-function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOutstandingYen, categoryGroups, categories, setCategories, transactions, setTransactions }: { month: string; debts: CreditDebt[]; setDebts: (debts: CreditDebt[]) => void; totalMonthlyObligationYen: number; totalOutstandingYen: number; categoryGroups: CategoryGroup[]; categories: Category[]; setCategories: Dispatch<SetStateAction<Category[]>>; transactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>> }) {
+function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOutstandingYen, categoryGroups, categories, setCategories, transactions, setTransactions }: { month: string; debts: CreditDebt[]; setDebts: Dispatch<SetStateAction<CreditDebt[]>>; totalMonthlyObligationYen: number; totalOutstandingYen: number; categoryGroups: CategoryGroup[]; categories: Category[]; setCategories: Dispatch<SetStateAction<Category[]>>; transactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>> }) {
   const [draftDebt, setDraftDebt] = useState<CreditDebt | null>(null);
   const [deleteDebtId, setDeleteDebtId] = useState<string | null>(null);
+  const [debtError, setDebtError] = useState<string | null>(null);
+  const [isSavingDebt, setIsSavingDebt] = useState(false);
+  const [isDeletingDebt, setIsDeletingDebt] = useState(false);
   const deleteDebt = debts.find((debt) => debt.id === deleteDebtId) ?? null;
   const deleteLinkedTransactionCount = deleteDebt?.categoryId ? transactions.filter((transaction) => transaction.categoryId === deleteDebt.categoryId && transaction.date.startsWith(month)).length : 0;
   const updateDraft = (changes: Partial<CreditDebt>) => setDraftDebt((previous) => previous ? { ...previous, ...changes } : previous);
-  const openAddDebt = () => setDraftDebt({ ...emptyDebtDraft, id: makeLocalId("debt") });
-  const openEditDebt = (debt: CreditDebt) => setDraftDebt({ ...emptyDebtDraft, ...debt });
-  const saveDebt = () => {
+  const openAddDebt = () => {
+    setDebtError(null);
+    setDraftDebt({ ...emptyDebtDraft, id: makeLocalId("debt") });
+  };
+  const openEditDebt = (debt: CreditDebt) => {
+    setDebtError(null);
+    setDraftDebt({ ...emptyDebtDraft, ...debt });
+  };
+  const saveDebt = async () => {
     if (!draftDebt?.cardName.trim()) return;
     const normalized: CreditDebt = {
       ...draftDebt,
@@ -739,15 +748,43 @@ function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOuts
       installmentsPaid: draftDebt.type === "installment" ? Math.max(0, Math.round(draftDebt.installmentsPaid ?? 0)) : undefined,
       expectedBillingDate: draftDebt.type === "lump_sum" ? draftDebt.expectedBillingDate : undefined,
     };
-    setDebts(debts.some((debt) => debt.id === normalized.id) ? debts.map((debt) => debt.id === normalized.id ? normalized : debt) : [...debts, normalized]);
-    setDraftDebt(null);
+    const isExisting = debts.some((debt) => debt.id === normalized.id);
+    setIsSavingDebt(true);
+    setDebtError(null);
+    try {
+      const response = await fetch(isExisting ? `/api/debts/${normalized.id}` : "/api/debts", {
+        method: isExisting ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(normalized),
+      });
+      const payload = await response.json().catch(() => ({})) as { debt?: CreditDebt; error?: string };
+      if (!response.ok || !payload.debt) throw new Error(payload.error ?? "Could not save debt.");
+      setDebts((previous) => previous.some((debt) => debt.id === payload.debt!.id) ? previous.map((debt) => debt.id === payload.debt!.id ? payload.debt! : debt) : [...previous, payload.debt!]);
+      setDraftDebt(null);
+    } catch (error) {
+      setDebtError(error instanceof Error ? error.message : "Could not save debt.");
+    } finally {
+      setIsSavingDebt(false);
+    }
   };
-  const removeDebt = (debt: CreditDebt) => {
-    setDebts(debts.filter((item) => item.id !== debt.id));
-    setDeleteDebtId(null);
-    if (!debt.categoryId) return;
-    setTransactions((previous) => previous.map((transaction) => transaction.categoryId === debt.categoryId && transaction.date.startsWith(month) ? { ...transaction, categoryId: undefined } : transaction));
-    setCategories((previous) => previous.filter((category) => category.id !== debt.categoryId));
+  const removeDebt = async (debt: CreditDebt) => {
+    setIsDeletingDebt(true);
+    setDebtError(null);
+    try {
+      const response = await fetch(`/api/debts/${debt.id}?month=${encodeURIComponent(month)}`, { method: "DELETE" });
+      const payload = await response.json().catch(() => ({})) as { error?: string; removedCategoryId?: string | null };
+      if (!response.ok) throw new Error(payload.error ?? "Could not delete debt.");
+      const removedCategoryId = payload.removedCategoryId ?? debt.categoryId;
+      setDebts((previous) => previous.filter((item) => item.id !== debt.id));
+      setDeleteDebtId(null);
+      if (!removedCategoryId) return;
+      setTransactions((previous) => previous.map((transaction) => transaction.categoryId === removedCategoryId && transaction.date.startsWith(month) ? { ...transaction, categoryId: undefined } : transaction));
+      setCategories((previous) => previous.filter((category) => category.id !== removedCategoryId));
+    } catch (error) {
+      setDebtError(error instanceof Error ? error.message : "Could not delete debt.");
+    } finally {
+      setIsDeletingDebt(false);
+    }
   };
   const requestDeleteDebt = (debt: CreditDebt) => {
     if (debt.currentBalanceYen <= 0 || debt.isPaid) {
@@ -758,6 +795,7 @@ function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOuts
   };
   return (
     <div className="space-y-4">
+      {debtError && <div className="rounded-lg border border-[#F2B8B5] bg-[#FBE5E3] px-3 py-2 text-sm text-[#9A2D27]">{debtError}</div>}
       <div className="flex justify-end">
         <button type="button" onClick={openAddDebt} className="inline-flex items-center gap-2 rounded-lg bg-[#4A7CFF] px-3 py-2 text-sm font-medium text-white hover:bg-[#3F6DE8]">
           <Plus className="h-3.5 w-3.5" /> Add debt
@@ -858,8 +896,8 @@ function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOuts
             {draftDebt.type === "lump_sum" && <TextInput label="Expected billing date" type="date" value={draftDebt.expectedBillingDate ?? ""} onChange={(value) => updateDraft({ expectedBillingDate: value })} />}
             <div className="md:col-span-2"><TextInput label="Optional notes" value={draftDebt.description ?? ""} onChange={(value) => updateDraft({ description: value })} /></div>
             <div className="md:col-span-2 mt-2 flex gap-3">
-              <button type="button" onClick={() => setDraftDebt(null)} className="flex-1 rounded-lg bg-[#F5F4F0] px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-[#EEEDE9]">Cancel</button>
-              <button type="button" onClick={saveDebt} className="flex-1 rounded-lg bg-[#4A7CFF] px-4 py-2.5 text-sm font-medium text-white hover:bg-[#3F6DE8]">Save debt</button>
+              <button type="button" onClick={() => setDraftDebt(null)} disabled={isSavingDebt} className="flex-1 rounded-lg bg-[#F5F4F0] px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-[#EEEDE9] disabled:cursor-not-allowed disabled:opacity-60">Cancel</button>
+              <button type="button" onClick={saveDebt} disabled={isSavingDebt} className="flex-1 rounded-lg bg-[#4A7CFF] px-4 py-2.5 text-sm font-medium text-white hover:bg-[#3F6DE8] disabled:cursor-not-allowed disabled:opacity-60">{isSavingDebt ? "Saving..." : "Save debt"}</button>
             </div>
           </div>
         </Modal>
@@ -871,8 +909,8 @@ function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOuts
             <p className="mt-3 rounded-md bg-[#FBEFD9] px-3 py-2 text-xs text-[#8A5A10]">{deleteLinkedTransactionCount} current-month transactions will move to Uncategorized before the Debt Payments row is removed.</p>
           )}
           <div className="mt-5 grid grid-cols-2 gap-3">
-            <button type="button" onClick={() => setDeleteDebtId(null)} className="rounded-lg bg-[#F5F4F0] px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-[#EEEDE9]">Cancel</button>
-            <button type="button" onClick={() => removeDebt(deleteDebt)} className="rounded-lg bg-[#E5534B] px-4 py-2.5 text-sm font-medium text-white hover:bg-[#CE4842]">Delete anyway</button>
+            <button type="button" onClick={() => setDeleteDebtId(null)} disabled={isDeletingDebt} className="rounded-lg bg-[#F5F4F0] px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-[#EEEDE9] disabled:cursor-not-allowed disabled:opacity-60">Cancel</button>
+            <button type="button" onClick={() => removeDebt(deleteDebt)} disabled={isDeletingDebt} className="rounded-lg bg-[#E5534B] px-4 py-2.5 text-sm font-medium text-white hover:bg-[#CE4842] disabled:cursor-not-allowed disabled:opacity-60">{isDeletingDebt ? "Deleting..." : "Delete anyway"}</button>
           </div>
         </Modal>
       )}
