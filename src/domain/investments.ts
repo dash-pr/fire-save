@@ -24,8 +24,8 @@ export function calculateInvestmentGain(investment: Investment): { gainYen: Yen 
 
 export function formatInvestmentSubtype(subtype: InvestmentAccountSubtype): string {
   const labels: Record<InvestmentAccountSubtype, string> = {
-    growth: "NISA Growth / 成長投資枠",
-    tsumitate: "NISA Tsumitate / 積立NISA",
+    growth: "NISA Growth",
+    tsumitate: "NISA Tsumitate",
     ideco: "iDeCo",
     taxable: "Taxable",
   };

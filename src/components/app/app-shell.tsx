@@ -39,6 +39,16 @@ import { calculateInvestmentGain, calculateLifetimeNisaUsage, formatInvestmentSu
 import type { Account, BudgetAssignment, Category, CategoryGroup, CreditDebt, ForecastInputs, IncomeEntry, Investment, MerchantRule, SavingsGoal, Transaction } from "@/domain/types";
 import type { AppInitialData } from "@/lib/app-data";
 import { formatJPY, formatMonth, formatPercent } from "@/lib/format";
+import { getCategoryDisplayName } from "@/lib/categories";
+import { getMerchantContextTag } from "@/lib/merchants";
+import { getAccountDisplayNames } from "@/lib/accounts";
+import { DEBT_TYPE_LABELS } from "@/lib/debtTypes";
+import {
+  Tooltip as JpTooltip,
+  TooltipContent as JpTooltipContent,
+  TooltipProvider as JpTooltipProvider,
+  TooltipTrigger as JpTooltipTrigger,
+} from "@/components/ui/tooltip";
 
 type PageKey = "home" | "budget" | "transactions" | "debt" | "goals" | "investments" | "forecast" | "reports" | "import" | "settings";
 
@@ -228,6 +238,7 @@ export default function AppShell({ initialData }: { children?: ReactNode; initia
   const page = pageTitles[activePage];
 
   return (
+    <JpTooltipProvider delayDuration={300}>
     <div className="min-h-screen bg-[#F5F4F0] text-slate-900">
       <WelcomeToast />
       <div className="flex">
@@ -259,6 +270,7 @@ export default function AppShell({ initialData }: { children?: ReactNode; initia
         </main>
       </div>
     </div>
+    </JpTooltipProvider>
   );
 }
 
@@ -298,7 +310,17 @@ function HomePage({ readyToAssignYen, netWorthYen, savingsRate, fatfireAge, heal
             {accounts.map((account) => (
               <div key={account.id} className="flex items-center justify-between py-2.5 first:pt-0 last:pb-0">
                 <div className="min-w-0">
-                  <p className="truncate text-sm text-slate-900">{account.name}</p>
+                  <p className="truncate text-sm text-slate-900">
+                    {(() => {
+                      const { primary, secondary } = getAccountDisplayNames(account.name);
+                      return (
+                        <>
+                          <span>{primary}</span>
+                          {secondary && <span className="ml-1.5 text-[11px] text-[#6B7280] opacity-80">{secondary}</span>}
+                        </>
+                      );
+                    })()}
+                  </p>
                   <p className="text-[11px] uppercase tracking-[0.08em] text-[#6B7280]">{account.type}</p>
                 </div>
                 <p className={`text-sm font-medium tabular-nums ${account.balanceYen < 0 ? "text-[#E5534B]" : "text-slate-900"}`}>{formatJPY(account.balanceYen)}</p>
@@ -508,11 +530,14 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
       const key = groupBy === "category" ? transaction.categoryId ?? "uncategorized" : weekOfMonth(transaction.date);
       groups.set(key, [...(groups.get(key) ?? []), transaction]);
     });
-    return Array.from(groups.entries()).map(([key, rows]) => ({
-      key,
-      label: groupBy === "category" ? categories.find((category) => category.id === key)?.name ?? "Uncategorized" : key,
-      rows,
-    }));
+    return Array.from(groups.entries()).map(([key, rows]) => {
+      const categoryName = categories.find((category) => category.id === key)?.name;
+      return {
+        key,
+        label: groupBy === "category" ? (categoryName ? getCategoryDisplayName(categoryName) : "Uncategorized") : key,
+        rows,
+      };
+    });
   }, [categories, filteredTransactions, groupBy]);
 
   const toggleFilterValue = (field: "accountIds" | "categoryIds", value: string) => setFilters((previous) => ({
@@ -525,8 +550,9 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
     const finalCategoryId = previousMerchantCategory ?? categoryId;
     setTransactions((previous) => previous.map((item) => item.id === transaction.id ? { ...item, categoryId: finalCategoryId } : item));
     if (previousMerchantCategory && previousMerchantCategory !== categoryId) {
-      const categoryName = categories.find((category) => category.id === previousMerchantCategory)?.name ?? "previous category";
-      setInlineMessage(`${transaction.payee} was previously categorized as ${categoryName}; previous category auto-applied.`);
+      const categoryName = categories.find((category) => category.id === previousMerchantCategory)?.name;
+      const displayCategoryName = categoryName ? getCategoryDisplayName(categoryName) : "previous category";
+      setInlineMessage(`${transaction.payee} was previously categorized as ${displayCategoryName}; previous category auto-applied.`);
     } else {
       setInlineMessage(null);
     }
@@ -542,7 +568,7 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
       setInlineMessage("A merchant rule already exists for this payee.");
       return;
     }
-    const rule: MerchantRule = { id: makeLocalId("rule"), pattern: transaction.payee, categoryName: categories.find((category) => category.id === transaction.categoryId)?.name ?? "未分類", categoryId: transaction.categoryId, fuzzyMatch: true, createdAt: new Date().toISOString() };
+    const rule: MerchantRule = { id: makeLocalId("rule"), pattern: transaction.payee, categoryName: categories.find((category) => category.id === transaction.categoryId)?.name ?? "Uncategorized", categoryId: transaction.categoryId, fuzzyMatch: true, createdAt: new Date().toISOString() };
     setMerchantRules((previous) => [...previous, rule]);
     setTransactions((previous) => previous.map((item) => matchesMerchantRule(item.payee, rule) ? { ...item, categoryId: rule.categoryId } : item));
     setInlineMessage(`Always categorize ${transaction.payee} rule created.`);
@@ -574,18 +600,21 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
         <div className="grid gap-3 xl:grid-cols-[1.2fr_1fr_1fr_0.8fr_0.8fr]">
           <TextInput label="Search merchant or memo" value={filters.search} onChange={(value) => setFilters((previous) => ({ ...previous, search: value }))} />
           <FilterChecklist title="Accounts">
-            {accounts.map((account) => (
-              <label key={account.id} className="flex items-center gap-2 rounded px-1 py-0.5 hover:bg-[#FAFAF8]">
-                <input type="checkbox" checked={filters.accountIds.includes(account.id)} onChange={() => toggleFilterValue("accountIds", account.id)} className="accent-[#4A7CFF]" />
-                <span className="truncate">{account.name}</span>
-              </label>
-            ))}
+            {accounts.map((account) => {
+              const { primary } = getAccountDisplayNames(account.name);
+              return (
+                <label key={account.id} className="flex items-center gap-2 rounded px-1 py-0.5 hover:bg-[#FAFAF8]">
+                  <input type="checkbox" checked={filters.accountIds.includes(account.id)} onChange={() => toggleFilterValue("accountIds", account.id)} className="accent-[#4A7CFF]" />
+                  <span className="truncate">{primary}</span>
+                </label>
+              );
+            })}
           </FilterChecklist>
           <FilterChecklist title="Categories">
             {categories.map((category) => (
               <label key={category.id} className="flex items-center gap-2 rounded px-1 py-0.5 hover:bg-[#FAFAF8]">
                 <input type="checkbox" checked={filters.categoryIds.includes(category.id)} onChange={() => toggleFilterValue("categoryIds", category.id)} className="accent-[#4A7CFF]" />
-                <span className="truncate">{category.name}</span>
+                <span className="truncate">{getCategoryDisplayName(category.name)}</span>
               </label>
             ))}
             <label className="flex items-center gap-2 rounded px-1 py-0.5 hover:bg-[#FAFAF8]">
@@ -633,10 +662,9 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
                       <tr key={transaction.id} className={`border-b border-[#F0EFEB] transition hover:bg-[#FAFAF8] ${transaction.categoryId ? "" : "bg-[#FBEFD9]/40"}`}>
                         <td className="py-2 pr-4 text-xs tabular-nums text-[#6B7280]">{transaction.date}</td>
                         <td className="py-2 pr-4">
-                          <div className="text-sm text-slate-900">{transaction.payee}</div>
-                          {transaction.memo && <div className="text-[11px] text-[#6B7280]">{transaction.memo}</div>}
+                          <MerchantLabel payee={transaction.payee} memo={transaction.memo ?? null} />
                         </td>
-                        <td className="py-2 pr-4 text-xs text-[#6B7280]">{accounts.find((account) => account.id === transaction.accountId)?.name ?? "Unknown"}</td>
+                        <td className="py-2 pr-4 text-xs text-[#6B7280]">{(() => { const acct = accounts.find((account) => account.id === transaction.accountId); return acct ? getAccountDisplayNames(acct.name).primary : "Unknown"; })()}</td>
                         <td className="py-2 pr-4">
                           <CategoryPicker value={transaction.categoryId ?? ""} onChange={(value) => updateCategory(transaction, value)} options={categories} currentName={category?.name} />
                         </td>
@@ -676,11 +704,12 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: "su
 }
 
 function CategoryPicker({ value, onChange, options, currentName }: { value: string; onChange: (value: string) => void; options: Category[]; currentName?: string }) {
+  const placeholder = currentName ? getCategoryDisplayName(currentName) : "Uncategorized";
   return (
     <div className="relative inline-block">
       <select value={value} onChange={(event) => onChange(event.target.value)} className="appearance-none rounded-full border border-[#E8E7E3] bg-transparent px-2.5 py-0.5 pr-6 text-[11px] text-slate-900 outline-none transition hover:border-[#4A7CFF] focus:border-[#4A7CFF]">
-        <option value="">{currentName ?? "Uncategorized"}</option>
-        {options.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+        <option value="">{placeholder}</option>
+        {options.map((option) => <option key={option.id} value={option.id}>{getCategoryDisplayName(option.name)}</option>)}
       </select>
       <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[#6B7280]" />
     </div>
@@ -804,7 +833,7 @@ function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOuts
       <section className="grid gap-4 xl:grid-cols-3">
         <MetricCard label="Outstanding debt" value={formatJPY(totalOutstandingYen)} detail="Active balances" tone={totalOutstandingYen > 0 ? "red" : "neutral"} />
         <MetricCard label="Monthly obligation" value={formatJPY(totalMonthlyObligationYen)} detail="Minimum planned payments" />
-        <MetricCard label="Active debt items" value={`${debts.filter((debt) => !debt.isPaid).length}`} detail="Ribo, bunkatsu, and ikkatsu" />
+        <MetricCard label="Active debt items" value={`${debts.filter((debt) => !debt.isPaid).length}`} detail="Revolving, installment, and lump-sum" />
       </section>
       {debts.length === 0 ? (
         <Card>
@@ -838,13 +867,14 @@ function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOuts
                 <span className={`absolute left-0 top-0 bottom-0 w-1 ${railColor}`} />
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">{debt.type === "revolving" ? "Ribo-barai" : debt.type === "installment" ? "Bunkatsu-barai" : "Ikkatsu-barai"}</p>
-                    <h3 className="mt-1 truncate text-[15px] font-medium text-slate-900">{debt.cardName}</h3>
+                    <DebtTypeBadge type={debt.type} />
+                    <h3 className="mt-1 truncate text-[15px] font-medium text-slate-900">{getAccountDisplayNames(debt.cardName).primary}</h3>
+                    {(() => { const sec = getAccountDisplayNames(debt.cardName).secondary; return sec ? <p className="text-[11px] text-[#6B7280] opacity-80">{sec}</p> : null; })()}
                   </div>
                   <div className="flex items-center gap-1">
                     {isDebtDueSoon(debt) && <span className="rounded-full bg-[#FBEFD9] px-2 py-0.5 text-[10px] font-medium text-[#8A5A10]">Due soon</span>}
                     <button type="button" onClick={() => openEditDebt(debt)} aria-label="Edit debt" className="rounded-md p-1.5 text-[#6B7280] hover:bg-[#FAFAF8] hover:text-slate-900"><Pencil className="h-3.5 w-3.5" /></button>
-                    <button type="button" onClick={() => requestDeleteDebt(debt)} aria-label={`Delete ${debt.cardName}`} className="rounded-md p-1.5 text-[#6B7280] hover:bg-[#FBE5E3] hover:text-[#E5534B]"><Trash2 className="h-3.5 w-3.5" /></button>
+                    <button type="button" onClick={() => requestDeleteDebt(debt)} aria-label={`Delete ${getAccountDisplayNames(debt.cardName).primary}`} className="rounded-md p-1.5 text-[#6B7280] hover:bg-[#FBE5E3] hover:text-[#E5534B]"><Trash2 className="h-3.5 w-3.5" /></button>
                   </div>
                 </div>
                 <div className="mt-4">
@@ -861,7 +891,7 @@ function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOuts
                   <div className="flex justify-between"><span>Monthly payment</span><span className="tabular-nums text-slate-900">{formatJPY(debt.monthlyPaymentYen)}</span></div>
                   <div className="flex justify-between"><span>Monthly interest</span><span className="tabular-nums">{formatPercent(monthlyInterestRate, 2)}</span></div>
                   <div className="flex justify-between"><span>Due day</span><span className="tabular-nums">{debt.paymentDueDay ? ordinalDay(debt.paymentDueDay) : "—"}</span></div>
-                  <div className="flex justify-between"><span>Category</span><span className="truncate text-slate-700">{category?.name ?? "Unlinked"}</span></div>
+                  <div className="flex justify-between"><span>Category</span><span className="truncate text-slate-700">{category ? getCategoryDisplayName(category.name) : "Unlinked"}</span></div>
                   {ribo && <div className="flex justify-between"><span>Payoff</span><span className="tabular-nums">{ribo.monthsToPayoff} mo · {formatJPY(ribo.totalInterestYen)} interest</span></div>}
                   {bunkatsu && <div className="flex justify-between"><span>Remaining</span><span className="tabular-nums">{bunkatsu.remainingInstallments} installments · {formatJPY(bunkatsu.remainingBalanceYen)}</span></div>}
                   {debt.type === "lump_sum" && <div className="flex justify-between"><span>Expected billing</span><span className="tabular-nums">{debt.expectedBillingDate ?? "Not set"}</span></div>}
@@ -876,15 +906,15 @@ function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOuts
           <div className="grid gap-3 md:grid-cols-2">
             <TextInput label="Card or lender name" value={draftDebt.cardName} onChange={(value) => updateDraft({ cardName: value })} />
             <SelectField label="Debt type" value={draftDebt.type} onChange={(value) => updateDraft({ type: value as CreditDebt["type"] })}>
-              <option value="revolving">Ribo-barai revolving</option>
-              <option value="installment">Bunkatsu-barai installment</option>
-              <option value="lump_sum">Ikkatsu-barai lump sum</option>
+              <option value="revolving">Revolving Credit (リボ払い)</option>
+              <option value="installment">Installment (分割払い)</option>
+              <option value="lump_sum">Deferred Lump Sum (一括払い)</option>
             </SelectField>
             <SelectField label="Category" value={draftDebt.categoryId ?? ""} onChange={(value) => updateDraft({ categoryId: value || undefined })}>
               <option value="">Unlinked</option>
               {categoryGroups.map((group) => (
                 <optgroup key={group.id} label={group.name}>
-                  {categories.filter((category) => category.groupId === group.id).map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                  {categories.filter((category) => category.groupId === group.id).map((category) => <option key={category.id} value={category.id}>{getCategoryDisplayName(category.name)}</option>)}
                 </optgroup>
               ))}
             </SelectField>
@@ -1158,7 +1188,8 @@ function InvestmentsPage({ investments, setInvestments }: { investments: Investm
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">{formatInvestmentSubtype(investment.accountSubtype)}</p>
-                      <h3 className="mt-1 truncate text-[15px] font-medium text-slate-900">{investment.accountName}</h3>
+                      <h3 className="mt-1 truncate text-[15px] font-medium text-slate-900">{getAccountDisplayNames(investment.accountName).primary}</h3>
+                      {(() => { const sec = getAccountDisplayNames(investment.accountName).secondary; return sec ? <p className="text-[11px] text-[#6B7280] opacity-80">{sec}</p> : null; })()}
                     </div>
                     <button type="button" onClick={() => setSelectedId(investment.id)} aria-label="Edit investment" className="rounded-md p-1.5 text-[#6B7280] hover:bg-[#FAFAF8] hover:text-slate-900"><Pencil className="h-3.5 w-3.5" /></button>
                   </div>
@@ -1189,15 +1220,15 @@ function InvestmentsPage({ investments, setInvestments }: { investments: Investm
                 <div className="mb-4 flex items-start justify-between">
                   <div>
                     <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">Edit</p>
-                    <h3 className="mt-1 text-base font-medium text-slate-900">{selectedInvestment.accountName}</h3>
+                    <h3 className="mt-1 text-base font-medium text-slate-900">{getAccountDisplayNames(selectedInvestment.accountName).primary}</h3>
                   </div>
                   <button type="button" onClick={() => setSelectedId(null)} aria-label="Close" className="rounded-md p-1 text-[#6B7280] hover:bg-[#FAFAF8] hover:text-slate-900"><X className="h-4 w-4" /></button>
                 </div>
                 <div className="space-y-3">
                   <TextInput label="Account name" value={selectedInvestment.accountName} onChange={(value) => updateInvestment(selectedInvestment.id, { accountName: value })} />
                   <SelectField label="Account type" value={selectedInvestment.accountSubtype} onChange={(value) => updateInvestment(selectedInvestment.id, { accountSubtype: value as Investment["accountSubtype"] })}>
-                    <option value="growth">NISA Growth / 成長投資枠</option>
-                    <option value="tsumitate">NISA Tsumitate / 積立NISA</option>
+                    <option value="growth">NISA Growth (成長投資枠)</option>
+                    <option value="tsumitate">NISA Tsumitate (積立NISA)</option>
                     <option value="ideco">iDeCo</option>
                     <option value="taxable">Taxable</option>
                   </SelectField>
@@ -1264,7 +1295,7 @@ function ReportsPage({ selectedMonth, transactions, incomeEntries, categories, a
             <CartesianGrid strokeDasharray="3 3" stroke="#F0EFEB" horizontal={false} />
             <XAxis type="number" tickFormatter={compactCurrency} tick={{ fill: "#6B7280", fontSize: 11 }} />
             <YAxis dataKey="month" type="category" width={76} tick={{ fill: "#6B7280", fontSize: 11 }} />
-            <Tooltip formatter={(value, name) => [formatJPY(Number(value)), categories.find((category) => category.id === name)?.name ?? name]} contentStyle={{ backgroundColor: "white", border: "1px solid #F0EFEB", borderRadius: 8, fontSize: 12 }} />
+            <Tooltip formatter={(value, name) => { const c = categories.find((category) => category.id === name); return [formatJPY(Number(value)), c ? getCategoryDisplayName(c.name) : name]; }} contentStyle={{ backgroundColor: "white", border: "1px solid #F0EFEB", borderRadius: 8, fontSize: 12 }} />
             {categories.map((category, index) => <Bar key={category.id} dataKey={category.id} stackId="spend" fill={palette[index % palette.length]} />)}
           </BarChart>
         </ResponsiveContainer>
@@ -1276,7 +1307,7 @@ function ReportsPage({ selectedMonth, transactions, incomeEntries, categories, a
               <button key={item.category.id} type="button" onClick={() => onCategoryClick(item.category.id)} className="group flex items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-[#FAFAF8]">
                 <span className="flex min-w-0 items-center gap-2">
                   <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: item.color }} />
-                  <span className="truncate text-slate-900">{item.category.name}</span>
+                  <CategoryLabel name={item.category.name} className="truncate text-slate-900" />
                 </span>
                 <span className="shrink-0 tabular-nums text-[#6B7280]">{formatJPY(item.amount)} <span className="text-[#6B7280]/70">· {formatPercent(currentMonthTotal > 0 ? item.amount / currentMonthTotal : 0)}</span></span>
               </button>
@@ -1349,7 +1380,7 @@ function SettingsPage({ assumptions, setAssumption, accounts, setAccounts, inves
               {merchantRules.map((rule) => (
                 <tr key={rule.id} className="border-b border-[#F0EFEB]">
                   <td className="py-2 pr-4"><input value={rule.pattern} onChange={(event) => updateRule(rule.id, { pattern: event.target.value })} className="w-full rounded-md border border-[#E8E7E3] bg-white px-2 py-1 text-sm outline-none focus:border-[#4A7CFF]" /></td>
-                  <td className="py-2 pr-4"><select value={rule.categoryId} onChange={(event) => updateRule(rule.id, { categoryId: event.target.value })} className="rounded-md border border-[#E8E7E3] bg-white px-2 py-1 text-sm outline-none focus:border-[#4A7CFF]">{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></td>
+                  <td className="py-2 pr-4"><select value={rule.categoryId} onChange={(event) => updateRule(rule.id, { categoryId: event.target.value })} className="rounded-md border border-[#E8E7E3] bg-white px-2 py-1 text-sm outline-none focus:border-[#4A7CFF]">{categories.map((category) => <option key={category.id} value={category.id}>{getCategoryDisplayName(category.name)}</option>)}</select></td>
                   <td className="py-2 pr-4"><input type="checkbox" checked={rule.fuzzyMatch} onChange={(event) => updateRule(rule.id, { fuzzyMatch: event.target.checked })} className="accent-[#4A7CFF]" /></td>
                   <td className="py-2 pr-4 text-xs tabular-nums text-[#6B7280]">{rule.createdAt ? rule.createdAt.slice(0, 10) : "—"}</td>
                   <td className="py-2 text-right"><button type="button" onClick={() => setMerchantRules((previous) => previous.filter((item) => item.id !== rule.id))} className="rounded-md px-2 py-0.5 text-xs font-medium text-[#A32D27] hover:bg-[#FBE5E3]">Delete</button></td>
@@ -1361,9 +1392,9 @@ function SettingsPage({ assumptions, setAssumption, accounts, setAccounts, inves
       </Card>
       <Card title="Editable source values" eyebrow="Manual data entry">
         <div className="grid gap-4 xl:grid-cols-2">
-          <EditableList title="Accounts">{accounts.map((account) => <CurrencyInput key={account.id} label={account.name} value={account.balanceYen} onChange={(value) => setAccounts(accounts.map((item) => item.id === account.id ? { ...item, balanceYen: value } : item))} />)}</EditableList>
-          <EditableList title="Investments">{investments.map((investment) => <CurrencyInput key={investment.id} label={investment.accountName} value={investment.currentBalanceYen} onChange={(value) => setInvestments(investments.map((item) => item.id === investment.id ? { ...item, currentBalanceYen: value } : item))} />)}</EditableList>
-          <EditableList title="Debt balances">{debts.map((debt) => <CurrencyInput key={debt.id} label={debt.cardName} value={debt.currentBalanceYen} onChange={(value) => setDebts(debts.map((item) => item.id === debt.id ? { ...item, currentBalanceYen: value } : item))} />)}</EditableList>
+          <EditableList title="Accounts">{accounts.map((account) => <CurrencyInput key={account.id} label={getAccountDisplayNames(account.name).primary} value={account.balanceYen} onChange={(value) => setAccounts(accounts.map((item) => item.id === account.id ? { ...item, balanceYen: value } : item))} />)}</EditableList>
+          <EditableList title="Investments">{investments.map((investment) => <CurrencyInput key={investment.id} label={getAccountDisplayNames(investment.accountName).primary} value={investment.currentBalanceYen} onChange={(value) => setInvestments(investments.map((item) => item.id === investment.id ? { ...item, currentBalanceYen: value } : item))} />)}</EditableList>
+          <EditableList title="Debt balances">{debts.map((debt) => <CurrencyInput key={debt.id} label={getAccountDisplayNames(debt.cardName).primary} value={debt.currentBalanceYen} onChange={(value) => setDebts(debts.map((item) => item.id === debt.id ? { ...item, currentBalanceYen: value } : item))} />)}</EditableList>
           <EditableList title="Goal balances">{goals.map((goal) => <CurrencyInput key={goal.id} label={goal.name} value={goal.currentSavedYen} onChange={(value) => setGoals(goals.map((item) => item.id === goal.id ? { ...item, currentSavedYen: value } : item))} />)}</EditableList>
         </div>
       </Card>
@@ -1423,7 +1454,7 @@ function BudgetGroup({ name, rows, isCollapsed, toggleCollapsed, addCategory, de
                   <button type="button" onClick={() => deleteCategory(row.category)} aria-label="Delete category" className="opacity-0 transition group-hover:opacity-100 rounded p-0.5 text-[#6B7280] hover:bg-[#FBE5E3] hover:text-[#E5534B]">
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
-                  <span className="text-sm text-slate-900">{row.category.name}</span>
+                  <CategoryLabel name={row.category.name} className="text-sm text-slate-900" />
                   {estimatedAssignments[budgetKey(month, row.category.id)] && (
                     <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#8A5A10]">estimated</span>
                   )}
@@ -1438,17 +1469,23 @@ function BudgetGroup({ name, rows, isCollapsed, toggleCollapsed, addCategory, de
                 </button>
                 {isActivityOpen && (
                   <div className="absolute right-4 top-10 z-20 w-80 rounded-xl bg-white p-4 text-left shadow-[0_12px_32px_rgba(17,24,39,0.12)] ring-1 ring-[#F0EFEB]">
-                    <p className="text-sm font-medium text-slate-900">{row.category.name} activity</p>
+                    <p className="text-sm font-medium text-slate-900">{getCategoryDisplayName(row.category.name)} activity</p>
                     <div className="mt-3 max-h-40 space-y-1 overflow-auto scroll-soft">
                       {rowTransactions.length === 0 ? (
                         <p className="text-xs text-[#6B7280]">No transactions in this category this month.</p>
                       ) : (
-                        rowTransactions.map((transaction) => (
-                          <div key={transaction.id} className="flex justify-between gap-3 py-1 text-xs">
-                            <span className="truncate text-slate-900">{transaction.payee}</span>
-                            <span className="tabular-nums text-[#6B7280]">{formatJPY(transaction.amountYen)}</span>
-                          </div>
-                        ))
+                        rowTransactions.map((transaction) => {
+                          const tag = getMerchantContextTag(transaction.payee);
+                          return (
+                            <div key={transaction.id} className="flex justify-between gap-3 py-1 text-xs">
+                              <span className="min-w-0 truncate text-slate-900">
+                                {transaction.payee}
+                                {tag && <span className="ml-1.5 text-[#6B7280]">· {tag}</span>}
+                              </span>
+                              <span className="tabular-nums text-[#6B7280]">{formatJPY(transaction.amountYen)}</span>
+                            </div>
+                          );
+                        })
                       )}
                     </div>
                     <div className="mt-3 space-y-2 border-t border-[#F0EFEB] pt-3">
@@ -1498,6 +1535,53 @@ function InlineAssignedInput({ value, onChange }: { value: number; onChange: (va
       transition={{ duration: 0.18 }}
       className="hide-spin w-24 rounded border-b border-transparent bg-transparent px-1 py-1 text-right text-sm tabular-nums text-slate-900 outline-none transition focus:border-[#4A7CFF] focus:bg-white"
     />
+  );
+}
+
+function hasJapanese(value: string | null | undefined): boolean {
+  return Boolean(value && /[぀-ヿ㐀-䶿一-鿿]/.test(value));
+}
+
+function DebtTypeBadge({ type }: { type: CreditDebt["type"] }) {
+  const label = DEBT_TYPE_LABELS[type];
+  return (
+    <JpTooltip>
+      <JpTooltipTrigger asChild>
+        <p className="inline-flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">
+          <span>{label.en}</span>
+          <span className="normal-case tracking-normal text-[#9CA3AF]">{label.jp}</span>
+        </p>
+      </JpTooltipTrigger>
+      <JpTooltipContent className="max-w-[220px]">{label.jp} · {label.description}</JpTooltipContent>
+    </JpTooltip>
+  );
+}
+
+function CategoryLabel({ name, className }: { name: string; className?: string }) {
+  const display = getCategoryDisplayName(name);
+  if (display === name || !hasJapanese(name)) {
+    return <span className={className}>{display}</span>;
+  }
+  return (
+    <JpTooltip>
+      <JpTooltipTrigger asChild>
+        <span className={className}>{display}</span>
+      </JpTooltipTrigger>
+      <JpTooltipContent className="max-w-[200px]">{name}</JpTooltipContent>
+    </JpTooltip>
+  );
+}
+
+function MerchantLabel({ payee, memo }: { payee: string; memo?: string | null }) {
+  const tag = getMerchantContextTag(payee);
+  return (
+    <>
+      <div className="text-sm text-slate-900">
+        <span>{payee}</span>
+        {tag && <span className="ml-1.5 text-[11px] text-[#6B7280]">· {tag}</span>}
+      </div>
+      {memo && <div className="text-[11px] text-[#6B7280]">{memo}</div>}
+    </>
   );
 }
 

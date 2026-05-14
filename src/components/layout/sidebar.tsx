@@ -18,16 +18,17 @@ import {
 } from "lucide-react";
 import type { Account, Investment } from "@/domain/types";
 import { formatJPY } from "@/lib/format";
+import { getAccountDisplayNames } from "@/lib/accounts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 const nav = [
   { key: "home", label: "Home", icon: Home },
   { key: "budget", label: "Budget", icon: WalletCards },
   { key: "transactions", label: "Transactions", icon: ReceiptText },
-  { key: "debt", label: "Debt Plan", icon: CreditCard },
+  { key: "debt", label: "Debt", icon: CreditCard },
   { key: "goals", label: "Goals", icon: Target },
   { key: "investments", label: "Investments", icon: LineChart },
-  { key: "forecast", label: "FATFire Projection", icon: Flag },
+  { key: "forecast", label: "Forecast", icon: Flag },
   { key: "reports", label: "Reports", icon: BarChart3 },
   { key: "import", label: "Add Transactions", icon: UploadCloud },
 ];
@@ -316,6 +317,8 @@ function SidebarAccountRow({
     onEdit({ name });
   };
   const archiveAccount = () => onEdit({ isArchived: true } as Partial<Account>);
+  const { primary, secondary } = getAccountDisplayNames(account.name);
+  const tooltipLabel = secondary ?? account.name;
   return (
     <button
       type="button"
@@ -329,9 +332,9 @@ function SidebarAccountRow({
     >
       <Tooltip>
         <TooltipTrigger asChild>
-          <span className="min-w-0 flex-1 truncate">{account.name}</span>
+          <span className="min-w-0 flex-1 truncate">{primary}</span>
         </TooltipTrigger>
-        <TooltipContent side="right">{account.name}</TooltipContent>
+        <TooltipContent side="right">{tooltipLabel}</TooltipContent>
       </Tooltip>
       <span
         className={`shrink-0 text-right tabular-nums ${
