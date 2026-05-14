@@ -38,7 +38,6 @@ import { calculateHealthScore, calculateNetWorth } from "@/domain/finance";
 import { calculateInvestmentGain, calculateLifetimeNisaUsage, formatInvestmentSubtype, NISA_LIFETIME_LIMIT_YEN } from "@/domain/investments";
 import type { Account, BudgetAssignment, Category, CategoryGroup, CreditDebt, ForecastInputs, IncomeEntry, Investment, MerchantRule, SavingsGoal, Transaction } from "@/domain/types";
 import type { AppInitialData } from "@/lib/app-data";
-import { sampleAppInitialData } from "@/lib/app-data";
 import { formatJPY, formatMonth, formatPercent } from "@/lib/format";
 
 type PageKey = "home" | "budget" | "transactions" | "debt" | "goals" | "investments" | "forecast" | "reports" | "import" | "settings";
@@ -102,7 +101,7 @@ function pathnameToPageKey(pathname: string | null): PageKey {
   return (PAGE_KEYS.includes(key as PageKey) ? key : "budget") as PageKey;
 }
 
-export default function AppShell({ initialData = sampleAppInitialData }: { children?: ReactNode; initialData?: AppInitialData } = {}) {
+export default function AppShell({ initialData }: { children?: ReactNode; initialData: AppInitialData }) {
   const router = useRouter();
   const pathname = usePathname();
   const activePage = pathnameToPageKey(pathname);

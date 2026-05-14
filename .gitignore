@@ -37,6 +37,10 @@ yarn-error.log*
 stashy_import.json
 stashy_import_final.json
 
+# supabase local CLI state
+supabase/.branches/
+supabase/.temp/
+
 # vercel
 .vercel
 

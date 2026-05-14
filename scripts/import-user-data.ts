@@ -395,7 +395,7 @@ async function importCreditDebts(debts: JsonDebt[]) {
     }
     const debtType = debtTypeFor(debt.debtType);
     const description = debt.description ?? "";
-    const categoryName = debt.cardName.includes("Paidy") ? "Paidy あと払い" : `${debt.cardName} 返済`;
+    const categoryName = `${debt.cardName} 返済`;
     const category = await getOrCreateCategory(categoryName, { groupName: "Debt Payments", source: "system" });
     const annualInterestRate = normalizeInterestRate(debt.annualInterestRate);
     const monthlyInterestRate = normalizeInterestRate(debt.monthlyInterestRate ?? (debt.annualInterestRate ?? 0) / 12);
