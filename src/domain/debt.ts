@@ -19,6 +19,10 @@ function addMonthsIso(start: Date, months: number): string {
   return date.toISOString().slice(0, 10);
 }
 
+export function normalizeInterestRate(rate: number): number {
+  return rate > 1 ? rate / 100 : rate;
+}
+
 export function calculateRiboPayoff(args: {
   balanceYen: Yen;
   monthlyPaymentYen: Yen;
@@ -28,7 +32,7 @@ export function calculateRiboPayoff(args: {
 }): PayoffResult {
   const startDate = args.startDate ?? new Date();
   const maxMonths = args.maxMonths ?? 600;
-  const monthlyRate = Math.max(args.annualInterestRate, 0) / 12;
+  const monthlyRate = normalizeInterestRate(Math.max(args.annualInterestRate, 0)) / 12;
   let balance = Math.max(args.balanceYen, 0);
   let totalInterestYen = 0;
   let monthsToPayoff = 0;

@@ -23,22 +23,11 @@ import { WelcomeToast } from "@/components/app/welcome-toast";
 import { Card, MetricCard } from "@/components/shared/card";
 import { ProgressBar, StatusPill } from "@/components/shared/progress";
 import {
-  accounts,
-  budgetAssignments,
-  categories,
-  categoryGroups,
-  currentMonth,
-  debts,
-  forecastInputs,
-  incomeEntries,
-  investments,
-  merchantRules,
   nisaContributions,
   savingsGoals,
-  transactions,
 } from "@/data/sample-data";
 import { buildBudgetRows, calculateReadyToAssignYen, calculateSavingsRate } from "@/domain/budget";
-import { calculateBunkatsuRemaining, calculateDebtSummary, calculateRiboPayoff } from "@/domain/debt";
+import { calculateBunkatsuRemaining, calculateDebtSummary, calculateRiboPayoff, normalizeInterestRate } from "@/domain/debt";
 import {
   calculateAgeFromDob,
   calculateDeterministicForecast,
@@ -47,7 +36,9 @@ import {
 import { ForecastPage } from "@/components/forecast/forecast-page";
 import { calculateHealthScore, calculateNetWorth } from "@/domain/finance";
 import { calculateInvestmentGain, calculateLifetimeNisaUsage, formatInvestmentSubtype, NISA_LIFETIME_LIMIT_YEN } from "@/domain/investments";
-import type { Account, BudgetAssignment, Category, CreditDebt, ForecastInputs, IncomeEntry, Investment, MerchantRule, SavingsGoal, Transaction } from "@/domain/types";
+import type { Account, BudgetAssignment, Category, CategoryGroup, CreditDebt, ForecastInputs, IncomeEntry, Investment, MerchantRule, SavingsGoal, Transaction } from "@/domain/types";
+import type { AppInitialData } from "@/lib/app-data";
+import { sampleAppInitialData } from "@/lib/app-data";
 import { formatJPY, formatMonth, formatPercent } from "@/lib/format";
 
 type PageKey = "home" | "budget" | "transactions" | "debt" | "goals" | "investments" | "forecast" | "reports" | "import" | "settings";
@@ -111,28 +102,29 @@ function pathnameToPageKey(pathname: string | null): PageKey {
   return (PAGE_KEYS.includes(key as PageKey) ? key : "budget") as PageKey;
 }
 
-export default function AppShell(_props: { children?: ReactNode } = {}) {
+export default function AppShell({ initialData = sampleAppInitialData }: { children?: ReactNode; initialData?: AppInitialData } = {}) {
   const router = useRouter();
   const pathname = usePathname();
   const activePage = pathnameToPageKey(pathname);
   const setActivePage = (key: PageKey) => router.push(`/app/${key}`);
-  const [selectedMonth, setSelectedMonth] = useState(currentMonth);
+  const [selectedMonth, setSelectedMonth] = useState(initialData.currentMonth);
   const [transactionAccountFilterIds, setTransactionAccountFilterIds] = useState<string[]>([]);
   const [transactionCategoryFilterIds, setTransactionCategoryFilterIds] = useState<string[]>([]);
-  const [accountState, setAccountState] = useState<Account[]>(accounts);
-  const [incomeEntryState, setIncomeEntryState] = useState<IncomeEntry[]>(incomeEntries);
-  const [categoryState, setCategoryState] = useState<Category[]>(categories);
-  const [transactionState, setTransactionState] = useState<Transaction[]>(transactions);
-  const [merchantRuleState, setMerchantRuleState] = useState<MerchantRule[]>(merchantRules);
+  const [accountState, setAccountState] = useState<Account[]>(initialData.accounts);
+  const [incomeEntryState, setIncomeEntryState] = useState<IncomeEntry[]>(initialData.incomeEntries);
+  const [categoryGroupState] = useState(initialData.categoryGroups);
+  const [categoryState, setCategoryState] = useState<Category[]>(initialData.categories);
+  const [transactionState, setTransactionState] = useState<Transaction[]>(initialData.transactions);
+  const [merchantRuleState, setMerchantRuleState] = useState<MerchantRule[]>(initialData.merchantRules);
   const [assignmentState, setAssignmentState] = useState<Record<string, number>>(
-    Object.fromEntries(budgetAssignments.map((assignment) => [budgetKey(assignment.month, assignment.categoryId), assignment.assignedYen])),
+    Object.fromEntries(initialData.budgetAssignments.map((assignment) => [budgetKey(assignment.month, assignment.categoryId), assignment.assignedYen])),
   );
   const [estimatedAssignments, setEstimatedAssignments] = useState<Record<string, boolean>>({});
   const [budgetNotice, setBudgetNotice] = useState<string | null>(null);
-  const [debtState, setDebtState] = useState<CreditDebt[]>(debts);
+  const [debtState, setDebtState] = useState<CreditDebt[]>(initialData.debts);
   const [goalState, setGoalState] = useState<SavingsGoal[]>(savingsGoals);
-  const [investmentState, setInvestmentState] = useState<Investment[]>(investments);
-  const [assumptions, setAssumptions] = useState<ForecastInputs>(forecastInputs);
+  const [investmentState, setInvestmentState] = useState<Investment[]>(initialData.investments);
+  const [assumptions, setAssumptions] = useState<ForecastInputs>(initialData.forecastInputs);
   const [budgetFilter, setBudgetFilter] = useState<"all" | "overspent" | "underfunded" | "funded">("all");
 
   const activeCategories = categoryState.filter((category) => !category.isArchived);
@@ -255,10 +247,10 @@ export default function AppShell(_props: { children?: ReactNode } = {}) {
 
           {activePage === "home" && <HomePage readyToAssignYen={readyToAssignYen} netWorthYen={netWorth.netWorthYen} savingsRate={savingsRate} fatfireAge={deterministic.estimatedFatfireAge} healthScore={health.score} uncategorizedCount={uncategorizedCount} overspentCount={overspentCount} contributionDeltaYen={deterministic.contributionDeltaYen} accounts={accountState} onNavigate={setActivePage} />}
 
-          {activePage === "budget" && <BudgetPage month={selectedMonth} setMonth={openBudgetMonth} incomeEntries={currentIncomeEntries} setIncomeEntries={setIncomeEntryState} readyToAssignYen={readyToAssignYen} budgetRows={visibleBudgetRows} fullBudgetRows={budgetRows} budgetFilter={budgetFilter} setBudgetFilter={setBudgetFilter} categoryList={activeCategories} setCategories={setCategoryState} transactions={transactionState} setTransactions={setTransactionState} budgetNotice={budgetNotice} estimatedAssignments={estimatedAssignments} setAssignment={(categoryId, value) => setAssignmentState((previous) => ({ ...previous, [budgetKey(selectedMonth, categoryId)]: value }))} assignments={assignments} />}
+          {activePage === "budget" && <BudgetPage month={selectedMonth} setMonth={openBudgetMonth} incomeEntries={currentIncomeEntries} setIncomeEntries={setIncomeEntryState} readyToAssignYen={readyToAssignYen} budgetRows={visibleBudgetRows} fullBudgetRows={budgetRows} budgetFilter={budgetFilter} setBudgetFilter={setBudgetFilter} categoryGroups={categoryGroupState} categoryList={activeCategories} setCategories={setCategoryState} transactions={transactionState} setTransactions={setTransactionState} budgetNotice={budgetNotice} estimatedAssignments={estimatedAssignments} setAssignment={(categoryId, value) => setAssignmentState((previous) => ({ ...previous, [budgetKey(selectedMonth, categoryId)]: value }))} assignments={assignments} />}
 
           {activePage === "transactions" && <TransactionsPage key={`${transactionAccountFilterIds.join(",")}:${transactionCategoryFilterIds.join(",")}`} month={selectedMonth} setMonth={setSelectedMonth} transactions={ruledTransactions} rawTransactions={transactionState} setTransactions={setTransactionState} accounts={accountState} categories={activeCategories} merchantRules={merchantRuleState} setMerchantRules={setMerchantRuleState} initialAccountIds={transactionAccountFilterIds} initialCategoryIds={transactionCategoryFilterIds} />}
-          {activePage === "debt" && <DebtPage month={selectedMonth} debts={debtState} setDebts={setDebtState} totalMonthlyObligationYen={debtSummary.totalMonthlyObligationYen} totalOutstandingYen={debtSummary.totalOutstandingYen} categories={activeCategories} setCategories={setCategoryState} transactions={transactionState} setTransactions={setTransactionState} />}
+          {activePage === "debt" && <DebtPage month={selectedMonth} debts={debtState} setDebts={setDebtState} totalMonthlyObligationYen={debtSummary.totalMonthlyObligationYen} totalOutstandingYen={debtSummary.totalOutstandingYen} categoryGroups={categoryGroupState} categories={activeCategories} setCategories={setCategoryState} transactions={transactionState} setTransactions={setTransactionState} />}
           {activePage === "goals" && <GoalsPage month={selectedMonth} goals={goalState} setGoals={setGoalState} assignments={assignments} setCategories={setCategoryState} transactions={transactionState} setTransactions={setTransactionState} />}
           {activePage === "investments" && <InvestmentsPage investments={investmentState} setInvestments={setInvestmentState} />}
           {activePage === "forecast" && <ForecastPage inputs={effectiveForecastInputs} assumptions={assumptions} setAssumption={setAssumption} />}
@@ -320,7 +312,7 @@ function HomePage({ readyToAssignYen, netWorthYen, savingsRate, fatfireAge, heal
   );
 }
 
-function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToAssignYen, budgetRows, fullBudgetRows, budgetFilter, setBudgetFilter, categoryList, setCategories, transactions, setTransactions, budgetNotice, estimatedAssignments, setAssignment, assignments }: { month: string; setMonth: (month: string) => void; incomeEntries: IncomeEntry[]; setIncomeEntries: Dispatch<SetStateAction<IncomeEntry[]>>; readyToAssignYen: number; budgetRows: ReturnType<typeof buildBudgetRows>; fullBudgetRows: ReturnType<typeof buildBudgetRows>; budgetFilter: "all" | "overspent" | "underfunded" | "funded"; setBudgetFilter: (filter: "all" | "overspent" | "underfunded" | "funded") => void; categoryList: Category[]; setCategories: Dispatch<SetStateAction<Category[]>>; transactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>>; budgetNotice: string | null; estimatedAssignments: Record<string, boolean>; setAssignment: (categoryId: string, value: number) => void; assignments: BudgetAssignment[] }) {
+function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToAssignYen, budgetRows, fullBudgetRows, budgetFilter, setBudgetFilter, categoryGroups, categoryList, setCategories, transactions, setTransactions, budgetNotice, estimatedAssignments, setAssignment, assignments }: { month: string; setMonth: (month: string) => void; incomeEntries: IncomeEntry[]; setIncomeEntries: Dispatch<SetStateAction<IncomeEntry[]>>; readyToAssignYen: number; budgetRows: ReturnType<typeof buildBudgetRows>; fullBudgetRows: ReturnType<typeof buildBudgetRows>; budgetFilter: "all" | "overspent" | "underfunded" | "funded"; setBudgetFilter: (filter: "all" | "overspent" | "underfunded" | "funded") => void; categoryGroups: CategoryGroup[]; categoryList: Category[]; setCategories: Dispatch<SetStateAction<Category[]>>; transactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>>; budgetNotice: string | null; estimatedAssignments: Record<string, boolean>; setAssignment: (categoryId: string, value: number) => void; assignments: BudgetAssignment[] }) {
   const filters = ["all", "overspent", "underfunded", "funded"] as const;
   const [incomeCollapsed, setIncomeCollapsed] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(() => {
@@ -551,7 +543,7 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
       setInlineMessage("A merchant rule already exists for this payee.");
       return;
     }
-    const rule: MerchantRule = { id: makeLocalId("rule"), pattern: transaction.payee, categoryId: transaction.categoryId, fuzzyMatch: true, createdAt: new Date().toISOString() };
+    const rule: MerchantRule = { id: makeLocalId("rule"), pattern: transaction.payee, categoryName: categories.find((category) => category.id === transaction.categoryId)?.name ?? "未分類", categoryId: transaction.categoryId, fuzzyMatch: true, createdAt: new Date().toISOString() };
     setMerchantRules((previous) => [...previous, rule]);
     setTransactions((previous) => previous.map((item) => matchesMerchantRule(item.payee, rule) ? { ...item, categoryId: rule.categoryId } : item));
     setInlineMessage(`Always categorize ${transaction.payee} rule created.`);
@@ -705,6 +697,7 @@ const emptyDebtDraft: CreditDebt = {
   monthlyPaymentYen: 0,
   paymentDueDay: 27,
   annualInterestRate: 0,
+  monthlyInterestRate: 0,
   totalInstallments: 12,
   installmentsPaid: 0,
 };
@@ -724,7 +717,7 @@ function isDebtDueSoon(debt: CreditDebt): boolean {
   return daysUntilDue >= 0 && daysUntilDue <= 5;
 }
 
-function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOutstandingYen, categories, setCategories, transactions, setTransactions }: { month: string; debts: CreditDebt[]; setDebts: (debts: CreditDebt[]) => void; totalMonthlyObligationYen: number; totalOutstandingYen: number; categories: Category[]; setCategories: Dispatch<SetStateAction<Category[]>>; transactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>> }) {
+function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOutstandingYen, categoryGroups, categories, setCategories, transactions, setTransactions }: { month: string; debts: CreditDebt[]; setDebts: (debts: CreditDebt[]) => void; totalMonthlyObligationYen: number; totalOutstandingYen: number; categoryGroups: CategoryGroup[]; categories: Category[]; setCategories: Dispatch<SetStateAction<Category[]>>; transactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>> }) {
   const [draftDebt, setDraftDebt] = useState<CreditDebt | null>(null);
   const [deleteDebtId, setDeleteDebtId] = useState<string | null>(null);
   const deleteDebt = debts.find((debt) => debt.id === deleteDebtId) ?? null;
@@ -742,6 +735,7 @@ function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOuts
       currentBalanceYen: Math.max(0, Math.round(draftDebt.currentBalanceYen)),
       monthlyPaymentYen: Math.max(0, Math.round(draftDebt.monthlyPaymentYen)),
       annualInterestRate: Math.max(0, draftDebt.annualInterestRate),
+      monthlyInterestRate: Math.max(0, draftDebt.monthlyInterestRate ?? draftDebt.annualInterestRate / 12),
       totalInstallments: draftDebt.type === "installment" ? Math.max(0, Math.round(draftDebt.totalInstallments ?? 0)) : undefined,
       installmentsPaid: draftDebt.type === "installment" ? Math.max(0, Math.round(draftDebt.installmentsPaid ?? 0)) : undefined,
       expectedBillingDate: draftDebt.type === "lump_sum" ? draftDebt.expectedBillingDate : undefined,
@@ -799,6 +793,7 @@ function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOuts
             const ribo = debt.type === "revolving" ? calculateRiboPayoff({ balanceYen: debt.currentBalanceYen, monthlyPaymentYen: debt.monthlyPaymentYen, annualInterestRate: debt.annualInterestRate }) : null;
             const bunkatsu = debt.type === "installment" ? calculateBunkatsuRemaining({ monthlyPaymentYen: debt.monthlyPaymentYen, totalInstallments: debt.totalInstallments ?? 0, installmentsPaid: debt.installmentsPaid ?? 0 }) : null;
             const category = categories.find((item) => item.id === debt.categoryId);
+            const monthlyInterestRate = normalizeInterestRate(debt.monthlyInterestRate ?? debt.annualInterestRate / 12);
             const railColor = debt.type === "lump_sum" ? "bg-[#F5A623]" : "bg-[#E5534B]";
             const paidPct = debt.type === "installment" && debt.totalInstallments ? Math.min(100, Math.round(((debt.installmentsPaid ?? 0) / debt.totalInstallments) * 100)) : null;
             return (
@@ -827,7 +822,7 @@ function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOuts
                 )}
                 <div className="mt-4 grid gap-1 border-t border-[#F0EFEB] pt-3 text-xs leading-relaxed text-[#6B7280]">
                   <div className="flex justify-between"><span>Monthly payment</span><span className="tabular-nums text-slate-900">{formatJPY(debt.monthlyPaymentYen)}</span></div>
-                  <div className="flex justify-between"><span>Monthly interest</span><span className="tabular-nums">{formatPercent(debt.annualInterestRate / 12, 2)}</span></div>
+                  <div className="flex justify-between"><span>Monthly interest</span><span className="tabular-nums">{formatPercent(monthlyInterestRate, 2)}</span></div>
                   <div className="flex justify-between"><span>Due day</span><span className="tabular-nums">{debt.paymentDueDay ? ordinalDay(debt.paymentDueDay) : "—"}</span></div>
                   <div className="flex justify-between"><span>Category</span><span className="truncate text-slate-700">{category?.name ?? "Unlinked"}</span></div>
                   {ribo && <div className="flex justify-between"><span>Payoff</span><span className="tabular-nums">{ribo.monthsToPayoff} mo · {formatJPY(ribo.totalInterestYen)} interest</span></div>}
@@ -858,7 +853,7 @@ function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOuts
             </SelectField>
             <CurrencyInput label="Outstanding balance" value={draftDebt.currentBalanceYen} onChange={(value) => updateDraft({ currentBalanceYen: value })} />
             <CurrencyInput label="Monthly payment amount" value={draftDebt.monthlyPaymentYen} onChange={(value) => updateDraft({ monthlyPaymentYen: value })} />
-            <PercentInput label="Monthly interest rate" value={draftDebt.annualInterestRate / 12} onChange={(value) => updateDraft({ annualInterestRate: value * 12 })} />
+            <PercentInput label="Monthly interest rate" value={draftDebt.monthlyInterestRate ?? draftDebt.annualInterestRate / 12} onChange={(value) => updateDraft({ monthlyInterestRate: value, annualInterestRate: value * 12 })} />
             <NumberInput label="Payment due day" value={draftDebt.paymentDueDay ?? 1} onChange={(value) => updateDraft({ paymentDueDay: value })} />
             {draftDebt.type === "installment" && <><NumberInput label="Total installments" value={draftDebt.totalInstallments ?? 0} onChange={(value) => updateDraft({ totalInstallments: value })} /><NumberInput label="Installments already paid" value={draftDebt.installmentsPaid ?? 0} onChange={(value) => updateDraft({ installmentsPaid: value })} /></>}
             {draftDebt.type === "lump_sum" && <TextInput label="Expected billing date" type="date" value={draftDebt.expectedBillingDate ?? ""} onChange={(value) => updateDraft({ expectedBillingDate: value })} />}

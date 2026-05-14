@@ -18,6 +18,7 @@ function parseDebtBody(body: DebtBody) {
   if (body.type !== undefined && !debtTypes.has(body.type)) throw new Error("Invalid debt type.");
   const paymentDueDay = parseDueDay(body.paymentDueDay);
   return {
+    accountId: body.accountId || null,
     categoryId: body.categoryId || null,
     type: body.type,
     cardName: body.cardName?.trim() || undefined,
@@ -27,6 +28,7 @@ function parseDebtBody(body: DebtBody) {
     monthlyPaymentYen: body.monthlyPaymentYen === undefined ? undefined : Math.max(0, Math.round(body.monthlyPaymentYen)),
     paymentDueDay,
     annualInterestRate: body.annualInterestRate === undefined ? undefined : Math.max(0, body.annualInterestRate),
+    monthlyInterestRate: body.monthlyInterestRate === undefined ? undefined : Math.max(0, body.monthlyInterestRate),
     totalInstallments: body.totalInstallments === undefined ? undefined : Math.max(0, Math.round(body.totalInstallments)),
     installmentsPaid: body.installmentsPaid === undefined ? undefined : Math.max(0, Math.round(body.installmentsPaid)),
     expectedBillingDate: body.expectedBillingDate ? new Date(`${body.expectedBillingDate}T00:00:00`) : null,
@@ -36,6 +38,7 @@ function parseDebtBody(body: DebtBody) {
 
 function serializeDebt(debt: {
   id: string;
+  accountId: string | null;
   type: DebtType;
   cardName: string;
   description: string | null;
@@ -44,6 +47,7 @@ function serializeDebt(debt: {
   monthlyPaymentYen: number;
   paymentDueDay: number | null;
   annualInterestRate: number;
+  monthlyInterestRate: number;
   totalInstallments: number | null;
   installmentsPaid: number | null;
   expectedBillingDate: Date | null;
@@ -52,6 +56,7 @@ function serializeDebt(debt: {
 }) {
   return {
     id: debt.id,
+    accountId: debt.accountId ?? undefined,
     type: debt.type,
     cardName: debt.cardName,
     description: debt.description ?? undefined,
@@ -60,6 +65,7 @@ function serializeDebt(debt: {
     monthlyPaymentYen: debt.monthlyPaymentYen,
     paymentDueDay: debt.paymentDueDay ?? undefined,
     annualInterestRate: debt.annualInterestRate,
+    monthlyInterestRate: debt.monthlyInterestRate,
     totalInstallments: debt.totalInstallments ?? undefined,
     installmentsPaid: debt.installmentsPaid ?? undefined,
     expectedBillingDate: debt.expectedBillingDate?.toISOString().slice(0, 10),

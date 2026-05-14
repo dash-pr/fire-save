@@ -10,6 +10,7 @@ enum AccountType {
   checking
   savings
   credit
+  brokerage
 }
 
 enum TransactionType {
@@ -21,6 +22,11 @@ enum TransactionSource {
   manual
   OCR
   CSV
+  csv
+  pdf_smbc
+  pdf_jcb
+  pdf_saison
+  pdf_paidy
   recurring
 }
 
@@ -76,6 +82,7 @@ model Account {
   updatedAt    DateTime           @updatedAt
   transactions Transaction[]
   recurring    RecurringExpense[]
+  creditDebts  CreditDebt[]
 
   @@unique([localUserId, name])
   @@index([localUserId, type])
@@ -130,6 +137,7 @@ model Transaction {
   category    Category?         @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   document    UploadedDocument? @relation(fields: [documentId], references: [id], onDelete: SetNull)
 
+  @@unique([localUserId, date, payee, amountYen, accountId])
   @@index([localUserId, date])
   @@index([accountId, date])
   @@index([categoryId, date])
@@ -142,6 +150,7 @@ model RecurringExpense {
   categoryId   String?
   payee        String
   memo         String?
+  notes        String?
   amountYen    Int
   type         TransactionType @default(debit)
   dayOfMonth   Int
@@ -152,6 +161,7 @@ model RecurringExpense {
   account      Account         @relation(fields: [accountId], references: [id], onDelete: Cascade)
   category     Category?       @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
+  @@unique([localUserId, payee])
   @@index([localUserId, isActive])
 }
 
@@ -177,6 +187,7 @@ model IncomeEntry {
   amountYen   Int      @default(0)
   createdAt   DateTime @default(now())
 
+  @@unique([localUserId, month, sourceName, amountYen])
   @@index([localUserId, month])
 }
 
@@ -214,6 +225,7 @@ model GoalBalanceUpdate {
 model CreditDebt {
   id                  String    @id @default(cuid())
   localUserId         String    @default("local-user")
+  accountId           String?
   categoryId          String?   @unique
   type                DebtType
   cardName            String
@@ -223,16 +235,20 @@ model CreditDebt {
   originalAmountYen   Int?
   monthlyPaymentYen   Int       @default(0)
   minimumPaymentYen   Int?
-  paymentDueDay       Int?
+  paymentDueDay       Int       @default(1)
   annualInterestRate  Float     @default(0)
+  monthlyInterestRate Float     @default(0)
   totalInstallments   Int?
   installmentsPaid    Int?
   expectedBillingDate DateTime? @db.Date
   isPaid              Boolean   @default(false)
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
+  account             Account?  @relation(fields: [accountId], references: [id], onDelete: SetNull)
   category            Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
+  @@unique([localUserId, cardName, type, description])
+  @@index([accountId])
   @@index([localUserId, type, isPaid])
 }
 
@@ -253,16 +269,17 @@ model Investment {
 }
 
 model MerchantRule {
-  id          String   @id @default(cuid())
-  localUserId String   @default("local-user")
-  pattern     String
-  categoryId  String
-  fuzzyMatch  Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  id           String   @id @default(cuid())
+  localUserId  String   @default("local-user")
+  pattern      String
+  categoryName String
+  categoryId   String
+  fuzzyMatch   Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  category     Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
 
-  @@index([localUserId, pattern])
+  @@unique([localUserId, pattern])
 }
 
 model NisaContribution {

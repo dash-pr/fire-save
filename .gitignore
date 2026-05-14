@@ -33,6 +33,10 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# personal financial import data
+stashy_import.json
+stashy_import_final.json
+
 # vercel
 .vercel
 

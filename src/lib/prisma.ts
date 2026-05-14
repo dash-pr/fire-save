@@ -4,10 +4,7 @@ import { PrismaPg } from "@prisma/adapter-pg";
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
 function createPrismaClient() {
-	const connectionString = process.env.DATABASE_URL;
-	if (!connectionString) {
-		throw new Error("DATABASE_URL is required before using Prisma-backed API routes.");
-	}
+	const connectionString = process.env.DATABASE_URL ?? "postgresql://postgres:postgres@localhost:5432/fire_save?schema=public";
 	return new PrismaClient({ adapter: new PrismaPg({ connectionString }) });
 }
 

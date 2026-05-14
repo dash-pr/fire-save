@@ -15,7 +15,7 @@ export function WelcomeToast() {
     if (!raw) return;
     try {
       const parsed = JSON.parse(raw) as { name?: string };
-      if (parsed?.name) setName(parsed.name);
+      if (parsed?.name) queueMicrotask(() => setName(parsed.name ?? null));
     } catch {
       /* ignore */
     }

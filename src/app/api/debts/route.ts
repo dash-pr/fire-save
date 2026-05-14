@@ -20,6 +20,7 @@ function parseDebtBody(body: DebtBody, requireAll = false) {
   if (body.type !== undefined && !debtTypes.has(body.type)) throw new Error("Invalid debt type.");
   const paymentDueDay = parseDueDay(body.paymentDueDay);
   return {
+    accountId: body.accountId || undefined,
     categoryId: body.categoryId || undefined,
     type: body.type,
     cardName: body.cardName?.trim() || undefined,
@@ -29,6 +30,7 @@ function parseDebtBody(body: DebtBody, requireAll = false) {
     monthlyPaymentYen: body.monthlyPaymentYen === undefined ? undefined : Math.max(0, Math.round(body.monthlyPaymentYen)),
     paymentDueDay,
     annualInterestRate: body.annualInterestRate === undefined ? undefined : Math.max(0, body.annualInterestRate),
+    monthlyInterestRate: body.monthlyInterestRate === undefined ? undefined : Math.max(0, body.monthlyInterestRate),
     totalInstallments: body.totalInstallments === undefined ? undefined : Math.max(0, Math.round(body.totalInstallments)),
     installmentsPaid: body.installmentsPaid === undefined ? undefined : Math.max(0, Math.round(body.installmentsPaid)),
     expectedBillingDate: body.expectedBillingDate ? new Date(`${body.expectedBillingDate}T00:00:00`) : undefined,
@@ -38,6 +40,7 @@ function parseDebtBody(body: DebtBody, requireAll = false) {
 
 function serializeDebt(debt: {
   id: string;
+  accountId: string | null;
   type: DebtType;
   cardName: string;
   description: string | null;
@@ -46,6 +49,7 @@ function serializeDebt(debt: {
   monthlyPaymentYen: number;
   paymentDueDay: number | null;
   annualInterestRate: number;
+  monthlyInterestRate: number;
   totalInstallments: number | null;
   installmentsPaid: number | null;
   expectedBillingDate: Date | null;
@@ -54,6 +58,7 @@ function serializeDebt(debt: {
 }) {
   return {
     id: debt.id,
+    accountId: debt.accountId ?? undefined,
     type: debt.type,
     cardName: debt.cardName,
     description: debt.description ?? undefined,
@@ -62,6 +67,7 @@ function serializeDebt(debt: {
     monthlyPaymentYen: debt.monthlyPaymentYen,
     paymentDueDay: debt.paymentDueDay ?? undefined,
     annualInterestRate: debt.annualInterestRate,
+    monthlyInterestRate: debt.monthlyInterestRate,
     totalInstallments: debt.totalInstallments ?? undefined,
     installmentsPaid: debt.installmentsPaid ?? undefined,
     expectedBillingDate: debt.expectedBillingDate?.toISOString().slice(0, 10),
@@ -87,6 +93,7 @@ export async function POST(request: Request) {
         currentBalanceYen: data.currentBalanceYen ?? 0,
         monthlyPaymentYen: data.monthlyPaymentYen ?? 0,
         annualInterestRate: data.annualInterestRate ?? 0,
+        monthlyInterestRate: data.monthlyInterestRate ?? (data.annualInterestRate ?? 0) / 12,
       },
     });
     return Response.json({ debt: serializeDebt(debt) }, { status: 201 });

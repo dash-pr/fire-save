@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import AppShell from "@/components/app/app-shell";
+import { loadAppInitialData } from "@/lib/app-data";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -22,5 +23,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     redirect("/onboarding");
   }
 
-  return <AppShell>{children}</AppShell>;
+  const initialData = await loadAppInitialData();
+
+  return <AppShell initialData={initialData}>{children}</AppShell>;
 }

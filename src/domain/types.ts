@@ -1,6 +1,6 @@
 export type Yen = number;
 
-export type AccountType = "checking" | "savings" | "credit";
+export type AccountType = "checking" | "savings" | "credit" | "brokerage";
 export type TransactionType = "debit" | "credit";
 export type DebtType = "revolving" | "installment" | "lump_sum";
 export type AssetType = "stocks" | "ETF" | "mutual_fund" | "cash" | "crypto" | "other";
@@ -39,7 +39,7 @@ export type Transaction = {
   memo?: string;
   amountYen: Yen;
   type: TransactionType;
-  source: "manual" | "OCR" | "CSV" | "recurring";
+  source: "manual" | "OCR" | "CSV" | "csv" | "pdf_smbc" | "pdf_jcb" | "pdf_saison" | "pdf_paidy" | "recurring";
 };
 
 export type BudgetAssignment = {
@@ -73,6 +73,7 @@ export type BudgetRow = {
 
 export type CreditDebt = {
   id: string;
+  accountId?: string;
   categoryId?: string;
   type: DebtType;
   cardName: string;
@@ -82,6 +83,7 @@ export type CreditDebt = {
   monthlyPaymentYen: Yen;
   paymentDueDay?: number;
   annualInterestRate: number;
+  monthlyInterestRate?: number;
   totalInstallments?: number;
   installmentsPaid?: number;
   expectedBillingDate?: string;
@@ -133,6 +135,7 @@ export type Investment = {
 export type MerchantRule = {
   id: string;
   pattern: string;
+  categoryName: string;
   categoryId: string;
   fuzzyMatch: boolean;
   createdAt?: string;
