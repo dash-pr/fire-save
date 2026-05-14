@@ -557,7 +557,7 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
           {activePage === "accounts" && <AccountsPage accounts={accountState} debts={debtState} goals={goalState} investments={investmentState} transactions={transactionState} onSelectAccount={(accountId) => { setTransactionAccountFilterIds([accountId]); setActivePage("transactions"); }} />}
 
           {activePage === "transactions" && <TransactionsPage key={`${transactionAccountFilterIds.join(",")}:${transactionCategoryFilterIds.join(",")}`} month={selectedMonth} setMonth={setSelectedMonth} transactions={ruledTransactions} rawTransactions={transactionState} setTransactions={setTransactionState} incomeEntries={incomeEntryState} accounts={accountState} categories={activeCategories} merchantRules={merchantRuleState} setMerchantRules={setMerchantRuleState} initialAccountIds={transactionAccountFilterIds} initialCategoryIds={transactionCategoryFilterIds} debts={debtState} />}
-          {activePage === "debt" && <DebtPage month={selectedMonth} debts={debtState} setDebts={setDebtState} totalMonthlyObligationYen={debtSummary.totalMonthlyObligationYen} totalOutstandingYen={debtSummary.totalOutstandingYen} categoryGroups={categoryGroupState} categories={activeCategories} setCategories={persistCategories} transactions={transactionState} setTransactions={setTransactionState} />}
+          {activePage === "debt" && <DebtPage month={selectedMonth} debts={debtState} setDebts={setDebtState} totalMonthlyObligationYen={debtSummary.totalMonthlyObligationYen} totalOutstandingYen={debtSummary.totalOutstandingYen} categoryGroups={categoryGroupState} categories={activeCategories} setCategories={persistCategories} transactions={transactionState} setTransactions={setTransactionState} accounts={accountState} />}
           {activePage === "goals" && <GoalsPage month={selectedMonth} goals={goalState} setGoals={persistGoals} assignments={assignments} setCategories={persistCategories} transactions={transactionState} setTransactions={setTransactionState} setAssignment={persistAssignment} accounts={accountState} />}
           {activePage === "investments" && <InvestmentsPage investments={investmentState} setInvestments={setInvestmentState} />}
           {activePage === "forecast" && <ForecastPage inputs={effectiveForecastInputs} assumptions={assumptions} setAssumption={setAssumption} />}
@@ -1678,7 +1678,136 @@ function isDebtDueSoon(debt: CreditDebt): boolean {
   return daysUntilDue >= 0 && daysUntilDue <= 5;
 }
 
-function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOutstandingYen, categoryGroups, categories, setCategories, transactions, setTransactions }: { month: string; debts: CreditDebt[]; setDebts: Dispatch<SetStateAction<CreditDebt[]>>; totalMonthlyObligationYen: number; totalOutstandingYen: number; categoryGroups: CategoryGroup[]; categories: Category[]; setCategories: Dispatch<SetStateAction<Category[]>>; transactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>> }) {
+function DebtCycleView({ accounts, debts, transactions }: {
+  accounts: Account[];
+  debts: CreditDebt[];
+  transactions: Transaction[];
+}) {
+  const cardAccounts = accounts.filter((a) => !a.isArchived && a.type === "credit");
+  const today = new Date();
+  const breakdowns = cardAccounts.map((card) => buildCardCycleBreakdown({ card, debts, transactions, today }));
+  // Show cards with any meaningful next-debit first.
+  const sorted = [...breakdowns].sort((a, b) => b.totalDueYen - a.totalDueYen);
+  const totalDue = sorted.reduce((sum, b) => sum + b.totalDueYen, 0);
+
+  if (cardAccounts.length === 0) {
+    return (
+      <Card>
+        <EmptyHint>No credit cards yet — add one to see this billing cycle&apos;s debits.</EmptyHint>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card title="Next debit by card" eyebrow="This billing cycle">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-[#F0EFEB] text-[10px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">
+              <th className="pb-2 pr-4 text-left">Card</th>
+              <th className="pb-2 pr-4 text-right">New charges</th>
+              <th className="pb-2 pr-4 text-right">Ribo pay</th>
+              <th className="pb-2 pr-4 text-right">Installment</th>
+              <th className="pb-2 pr-0 text-right">Total due</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((b) => {
+              const dueDate = new Date(`${b.dueDate}T00:00:00`);
+              const cycleStart = new Date(`${b.cycleStart}T00:00:00`);
+              const cycleEnd = new Date(`${b.cycleEnd}T00:00:00`);
+              const fmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
+              const dueLabel = b.daysUntilDue === 0 ? "today" : `${b.daysUntilDue}d`;
+              const railColor = b.type === "revolving" ? "bg-[#E5534B]" : b.type === "installment" ? "bg-[#F5A623]" : "bg-[#E8E7E3]";
+              const { primary, secondary } = getAccountDisplayNames(b.card.name);
+              return (
+                <tr key={b.card.id} className="border-b border-[#F0EFEB] last:border-b-0 transition hover:bg-[#FAFAF8]">
+                  <td className="py-2.5 pr-4">
+                    <div className="flex items-start gap-2.5">
+                      <span className={`mt-0.5 inline-block h-7 w-1 shrink-0 rounded-full ${railColor}`} />
+                      <div className="min-w-0">
+                        <p className="text-sm text-slate-900">{primary}</p>
+                        <p className="text-[11px] text-[#6B7280]">
+                          {secondary && <span className="opacity-80">{secondary} · </span>}
+                          Cycle {fmt.format(cycleStart)} – {fmt.format(cycleEnd)} · Due {fmt.format(dueDate)} · {dueLabel}
+                        </p>
+                        {b.installmentRemaining > 0 && (
+                          <p className="text-[11px] text-[#6B7280]">{b.installmentRemaining} installment{b.installmentRemaining === 1 ? "" : "s"} remaining</p>
+                        )}
+                      </div>
+                    </div>
+                  </td>
+                  <td className="py-2.5 pr-4 text-right align-top">
+                    {b.newChargesYen > 0 ? (
+                      <JpTooltip>
+                        <JpTooltipTrigger asChild>
+                          <span className="cursor-help text-sm tabular-nums text-slate-900 underline decoration-dotted decoration-[#9CA3AF] underline-offset-2">{formatJPY(b.newChargesYen)}</span>
+                        </JpTooltipTrigger>
+                        <JpTooltipContent className="max-w-[280px]">
+                          <ul className="space-y-1 text-xs">
+                            {b.newCharges.slice(0, 6).map((c, index) => (
+                              <li key={index} className="flex items-center justify-between gap-3">
+                                <span className="min-w-0 truncate">{c.payee}</span>
+                                <span className="shrink-0 tabular-nums">{formatJPY(c.amountYen)}</span>
+                              </li>
+                            ))}
+                            {b.newCharges.length > 6 && <li className="text-[#9CA3AF]">+{b.newCharges.length - 6} more</li>}
+                          </ul>
+                        </JpTooltipContent>
+                      </JpTooltip>
+                    ) : (
+                      <span className="text-sm text-[#9CA3AF]">—</span>
+                    )}
+                  </td>
+                  <td className="py-2.5 pr-4 text-right align-top">
+                    {b.riboPrincipalYen + b.riboInterestYen > 0 ? (
+                      <div>
+                        <p className="text-sm tabular-nums text-slate-900">{formatJPY(b.riboPrincipalYen + b.riboInterestYen)}</p>
+                        {b.riboInterestYen > 0 && (
+                          <p className="text-[10px] tabular-nums text-[#6B7280]">{formatJPY(b.riboPrincipalYen)} + {formatJPY(b.riboInterestYen)} interest</p>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-sm text-[#9CA3AF]">—</span>
+                    )}
+                  </td>
+                  <td className="py-2.5 pr-4 text-right align-top text-sm tabular-nums">
+                    {b.installmentYen > 0 ? <span className="text-slate-900">{formatJPY(b.installmentYen)}</span> : <span className="text-[#9CA3AF]">—</span>}
+                  </td>
+                  <td className="py-2.5 pr-0 text-right align-top">
+                    <p className={`text-sm font-medium tabular-nums ${b.totalDueYen > 0 ? "text-slate-900" : "text-[#9CA3AF]"}`}>{b.totalDueYen > 0 ? formatJPY(b.totalDueYen) : "—"}</p>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            <tr className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">
+              <td className="pt-3 pr-4">Total expected debit</td>
+              <td colSpan={3} />
+              <td className="pt-3 pr-0 text-right tabular-nums text-slate-900 text-base">{formatJPY(totalDue)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </Card>
+      <p className="text-[11px] leading-relaxed text-[#6B7280]">
+        Cycle window approximated as the 30 days ending 16 days before each card&apos;s payment due day. New charges are debit transactions on the card itself within that window. Ribo principal and installment values come from the debt record; interest is the annual rate ÷ 12 applied to the current revolving balance.
+      </p>
+    </div>
+  );
+}
+
+function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOutstandingYen, categoryGroups, categories, setCategories, transactions, setTransactions, accounts }: { month: string; debts: CreditDebt[]; setDebts: Dispatch<SetStateAction<CreditDebt[]>>; totalMonthlyObligationYen: number; totalOutstandingYen: number; categoryGroups: CategoryGroup[]; categories: Category[]; setCategories: Dispatch<SetStateAction<Category[]>>; transactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>>; accounts: Account[] }) {
+  const [activeView, setActiveView] = useState<"overview" | "this-cycle">(() => {
+    if (typeof window === "undefined") return "overview";
+    return window.location.hash === "#this-cycle" ? "this-cycle" : "overview";
+  });
+  const setView = (view: "overview" | "this-cycle") => {
+    setActiveView(view);
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", view === "this-cycle" ? "#this-cycle" : window.location.pathname);
+    }
+  };
   const [draftDebt, setDraftDebt] = useState<CreditDebt | null>(null);
   const [deleteDebtId, setDeleteDebtId] = useState<string | null>(null);
   const [debtError, setDebtError] = useState<string | null>(null);
@@ -1758,11 +1887,23 @@ function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOuts
   return (
     <div className="space-y-4">
       {debtError && <div className="rounded-lg border border-[#F2B8B5] bg-[#FBE5E3] px-3 py-2 text-sm text-[#9A2D27]">{debtError}</div>}
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between gap-3">
+        <SubTabNav
+          active={activeView}
+          onChange={setView}
+          tabs={[
+            { key: "overview", label: "Overview" },
+            { key: "this-cycle", label: "This cycle" },
+          ]}
+        />
         <button type="button" onClick={openAddDebt} className="inline-flex items-center gap-2 rounded-lg bg-[#4A7CFF] px-3 py-2 text-sm font-medium text-white hover:bg-[#3F6DE8]">
           <Plus className="h-3.5 w-3.5" /> Add debt
         </button>
       </div>
+
+      {activeView === "this-cycle" ? (
+        <DebtCycleView accounts={accounts} debts={debts} transactions={transactions} />
+      ) : (<>
       <section className="grid gap-4 xl:grid-cols-3">
         <MetricCard label="Outstanding debt" value={formatJPY(totalOutstandingYen)} detail="Active balances" tone={totalOutstandingYen > 0 ? "red" : "neutral"} />
         <MetricCard label="Monthly obligation" value={formatJPY(totalMonthlyObligationYen)} detail="Minimum planned payments" />
@@ -1883,6 +2024,8 @@ function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOuts
           })}
         </section>
       )}
+      </>)}
+
       {draftDebt && (
         <Modal onClose={() => setDraftDebt(null)} title={debts.some((debt) => debt.id === draftDebt.id) ? "Edit debt" : "Add debt"} width="560px">
           <div className="grid gap-3 md:grid-cols-2">
