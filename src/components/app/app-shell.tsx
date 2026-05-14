@@ -43,6 +43,7 @@ import type { AppInitialData } from "@/lib/app-data";
 import { formatJPY, formatMonth, formatPercent } from "@/lib/format";
 import { getCategoryDisplayName } from "@/lib/categories";
 import { getMerchantContextTag } from "@/lib/merchants";
+import { getPayeeDisplayName, isCardSettlementPayee } from "@/lib/payees";
 import { getAccountDisplayNames } from "@/lib/accounts";
 import { DEBT_TYPE_LABELS } from "@/lib/debtTypes";
 import { getCategoryColor } from "@/lib/chartColors";
@@ -1003,7 +1004,12 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
   const [savingTransactionIds, setSavingTransactionIds] = useState<Record<string, boolean>>({});
   const [pendingDeleteTransaction, setPendingDeleteTransaction] = useState<Transaction | null>(null);
   const [isDeletingTransaction, setIsDeletingTransaction] = useState(false);
-  const monthTransactions = transactions.filter((transaction) => transaction.date.startsWith(month));
+  // Card-settlement debits (自払 …, メルペイ wallet top-ups, etc.) are bank-to-card transfers,
+  // not real spending. They live in the Card Payments view; hiding them here keeps the monthly
+  // outflow honest. The raw rows still exist in rawTransactions for analytics.
+  const monthTransactions = transactions
+    .filter((transaction) => transaction.date.startsWith(month))
+    .filter((transaction) => !isCardSettlementPayee(transaction.payee));
   const monthIncomeRows = useMemo<TransactionLedgerRow[]>(() => {
     // Income entries are often imported alongside the matching credit transaction (same amount in
     // the same month). Payee strings don't always align (Japanese bank record vs. English income
@@ -1371,7 +1377,7 @@ function CardPaymentsView({ month, accounts, debts, transactions }: {
   transactions: Transaction[];
 }) {
   const cardAccounts = accounts.filter((a) => !a.isArchived && a.type === "credit");
-  const settlements = useMemo(() => extractCardSettlements({ transactions, accounts }), [transactions, accounts]);
+  const settlements = useMemo(() => extractCardSettlements({ transactions, accounts, debts }), [transactions, accounts, debts]);
   const summaries = useMemo(
     () => cardAccounts.map((card) => summarizeCardPayments({ card, debts, settlements, currentMonth: month, monthsBack: 6 })),
     [cardAccounts, debts, settlements, month],
@@ -3103,15 +3109,42 @@ function CategoryLabel({ name, className }: { name: string; className?: string }
   );
 }
 
+/** Strip MoneyForward bookkeeping noise from memo strings before showing them in the UI. */
+function cleanMemo(memo: string | null | undefined): string | null {
+  if (!memo) return null;
+  const cleaned = memo
+    .split("|")
+    .map((piece) => piece.trim())
+    .filter((piece) => {
+      if (!piece) return false;
+      if (/^MoneyForward ID:/i.test(piece)) return false;
+      if (/^MoneyForward (subcategory|transfer|calculation target):/i.test(piece)) return false;
+      return true;
+    })
+    .join(" · ");
+  return cleaned || null;
+}
+
 function MerchantLabel({ payee, memo }: { payee: string; memo?: string | null }) {
+  const display = getPayeeDisplayName(payee);
   const tag = getMerchantContextTag(payee);
+  const cleanedMemo = cleanMemo(memo);
   return (
     <>
       <div className="text-sm text-slate-900">
-        <span>{payee}</span>
+        {display.primary !== payee ? (
+          <JpTooltip>
+            <JpTooltipTrigger asChild>
+              <span>{display.primary}</span>
+            </JpTooltipTrigger>
+            <JpTooltipContent className="max-w-[240px]">{payee}</JpTooltipContent>
+          </JpTooltip>
+        ) : (
+          <span>{payee}</span>
+        )}
         {tag && <span className="ml-1.5 text-[11px] text-[#6B7280]">· {tag}</span>}
       </div>
-      {memo && <div className="text-[11px] text-[#6B7280]">{memo}</div>}
+      {cleanedMemo && <div className="text-[11px] text-[#6B7280]">{cleanedMemo}</div>}
     </>
   );
 }

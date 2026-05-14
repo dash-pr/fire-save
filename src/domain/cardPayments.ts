@@ -6,30 +6,51 @@ import type { Account, CreditDebt, Transaction, Yen } from "./types";
  * many one-off bank-utility rows (振込手数料, 料 金, 振込 ワイズ, etc.) that aren't card settlements
  * and should never get attributed to a card.
  *
- * Regex is matched against the literal payee string after a light normalization (lower-case, no
- * spaces). `cardKey` is the substring we then look for in the matching credit Account's name.
+ * Some payees clear multiple cards at once. For example "自払 DF.ペイデイ" is a single bank debit
+ * that covers both Paidy Apple (¥8,739/mo) AND Paidy Amazon installments — we need to split that
+ * one transaction across both cards. `splitGroupKey` identifies a group whose pattern matches go
+ * to *all* cards in the group, in proportion to the cards' monthly debt schedules.
  */
-const CARD_PAYMENT_PATTERNS: Array<{ pattern: RegExp; cardKey: string }> = [
-  { pattern: /paypay/i,                                          cardKey: "PayPay" },
-  // SMBC quo-card line is itemized separately on Yucho — keep this above the generic SMBC match.
-  { pattern: /スミトモc.*クオ|スミトモc\(クオ/i,                cardKey: "三井住友" },
-  { pattern: /df\.ペイデイ|df\.peidei|paidy.*apple|apple.*paidy/i, cardKey: "Apple" },
-  { pattern: /paidy/i,                                            cardKey: "Paidy" },
-  { pattern: /jcb/i,                                              cardKey: "JCB" },
-  { pattern: /セゾン|saison|amex|アメックス/i,                   cardKey: "セゾン" },
-  // メルペイ on a Sony Bank debit row is a wallet top-up that funds the Mercari Card; treat as
-  // a Mercari Card settlement so the Card Payments view sees the real money outflow.
-  { pattern: /メルカリ|mercari|メルペイ|merpay/i,                cardKey: "メルカリ" },
-  // Cover both kanji and katakana spellings of Rakuten — MoneyForward exports use katakana.
-  { pattern: /楽天|ラクテン/i,                                    cardKey: "楽天" },
-  { pattern: /ミツイスミトモ|smbc|三井住友/i,                    cardKey: "三井住友" },
+type CardPaymentRule =
+  | { pattern: RegExp; mode: "single"; cardKey: string }
+  | { pattern: RegExp; mode: "split"; splitGroupKey: "paidy" };
+
+const CARD_PAYMENT_PATTERNS: CardPaymentRule[] = [
+  { pattern: /paypay/i,                                          mode: "single", cardKey: "PayPay" },
+  { pattern: /スミトモc.*クオ|スミトモc\(クオ/i,                mode: "single", cardKey: "三井住友" },
+  // Paidy auto-debit clears both Apple and Amazon Paidy in one bank line.
+  { pattern: /df\.ペイデイ|df\.peidei/i,                          mode: "split",  splitGroupKey: "paidy" },
+  { pattern: /paidy.*apple|apple.*paidy/i,                        mode: "single", cardKey: "Apple" },
+  { pattern: /paidy/i,                                            mode: "single", cardKey: "Paidy" },
+  { pattern: /jcb/i,                                              mode: "single", cardKey: "JCB" },
+  { pattern: /セゾン|saison|amex|アメックス/i,                   mode: "single", cardKey: "セゾン" },
+  // メルペイ on a non-credit account is a wallet top-up that funds the Mercari Card.
+  { pattern: /メルカリ|mercari|メルペイ|merpay/i,                mode: "single", cardKey: "メルカリ" },
+  { pattern: /楽天|ラクテン/i,                                    mode: "single", cardKey: "楽天" },
+  { pattern: /ミツイスミトモ|smbc|三井住友/i,                    mode: "single", cardKey: "三井住友" },
 ];
 
-export function matchSettlementToCard(payee: string, cards: Account[]): Account | null {
+const SPLIT_GROUP_NAME_KEYS: Record<"paidy", string[]> = {
+  paidy: ["Apple", "Amazon", "Paidy"],
+};
+
+function findRuleForPayee(payee: string): CardPaymentRule | null {
   const normalized = payee.replace(/\s+/g, "");
-  for (const { pattern, cardKey } of CARD_PAYMENT_PATTERNS) {
-    if (!pattern.test(normalized)) continue;
-    const card = cards.find((c) => c.name.toLowerCase().includes(cardKey.toLowerCase()));
+  return CARD_PAYMENT_PATTERNS.find((r) => r.pattern.test(normalized)) ?? null;
+}
+
+function findCardByKey(cards: Account[], key: string): Account | null {
+  return cards.find((c) => c.name.toLowerCase().includes(key.toLowerCase())) ?? null;
+}
+
+export function matchSettlementToCard(payee: string, cards: Account[]): Account | null {
+  const rule = findRuleForPayee(payee);
+  if (!rule) return null;
+  if (rule.mode === "single") return findCardByKey(cards, rule.cardKey);
+  // For split rules with no debt context we just return the first matching card; the proper
+  // split happens in extractCardSettlements where the per-card debt schedule is available.
+  for (const key of SPLIT_GROUP_NAME_KEYS[rule.splitGroupKey]) {
+    const card = findCardByKey(cards, key);
     if (card) return card;
   }
   return null;
@@ -41,32 +62,85 @@ export type CardSettlement = {
   date: string;
   payee: string;
   transactionId: string;
+  /** True when this row was synthesized from splitting a multi-card settlement. */
+  isSplit: boolean;
 };
 
 /**
  * Walk every debit transaction on non-credit accounts and attribute it to a credit card if the
- * payee looks like a card settlement. Returns one settlement record per matched transaction so
- * callers can sum / group by month / drill in.
+ * payee looks like a card settlement. For split-group rules (Paidy Apple + Amazon under one
+ * bank line) the single transaction is fanned out into one CardSettlement per card, weighted
+ * by the cards' monthly debt schedules. The synthesized rows share the source transactionId.
  */
 export function extractCardSettlements(args: {
   transactions: Transaction[];
   accounts: Account[];
+  debts: CreditDebt[];
 }): CardSettlement[] {
   const cards = args.accounts.filter((a) => a.type === "credit" && !a.isArchived);
   const fundingAccountIds = new Set(args.accounts.filter((a) => a.type !== "credit").map((a) => a.id));
+  const monthlyByCardId = new Map<string, number>();
+  for (const card of cards) {
+    const cardDebts = args.debts.filter((d) => !d.isPaid && (d.accountId === card.id || d.cardName === card.name));
+    monthlyByCardId.set(card.id, cardDebts.reduce((s, d) => s + d.monthlyPaymentYen, 0));
+  }
   const settlements: CardSettlement[] = [];
   for (const transaction of args.transactions) {
     if (transaction.type !== "debit") continue;
     if (!fundingAccountIds.has(transaction.accountId)) continue;
-    const card = matchSettlementToCard(transaction.payee, cards);
-    if (!card) continue;
-    settlements.push({
-      card,
-      amountYen: transaction.amountYen,
-      date: transaction.date,
-      payee: transaction.payee,
-      transactionId: transaction.id,
+    const rule = findRuleForPayee(transaction.payee);
+    if (!rule) continue;
+    if (rule.mode === "single") {
+      const card = findCardByKey(cards, rule.cardKey);
+      if (!card) continue;
+      settlements.push({
+        card,
+        amountYen: transaction.amountYen,
+        date: transaction.date,
+        payee: transaction.payee,
+        transactionId: transaction.id,
+        isSplit: false,
+      });
+      continue;
+    }
+
+    // split mode — find every card whose name matches one of the split group keys and weight by
+    // monthly schedule. If only one card matches (or all weights are zero) fall back to the first.
+    const groupKeys = SPLIT_GROUP_NAME_KEYS[rule.splitGroupKey];
+    const matches = cards.filter((card) => groupKeys.some((k) => card.name.toLowerCase().includes(k.toLowerCase())));
+    if (matches.length === 0) continue;
+    const weights = matches.map((card) => monthlyByCardId.get(card.id) ?? 0);
+    const totalWeight = weights.reduce((s, w) => s + w, 0);
+    if (matches.length === 1 || totalWeight === 0) {
+      settlements.push({
+        card: matches[0],
+        amountYen: transaction.amountYen,
+        date: transaction.date,
+        payee: transaction.payee,
+        transactionId: transaction.id,
+        isSplit: matches.length > 1,
+      });
+      continue;
+    }
+    // Distribute proportionally; absorb rounding into the largest share.
+    let allocated = 0;
+    const shares = matches.map((card, index) => {
+      const isLast = index === matches.length - 1;
+      const share = isLast ? transaction.amountYen - allocated : Math.round((weights[index] / totalWeight) * transaction.amountYen);
+      allocated += share;
+      return { card, share };
     });
+    for (const { card, share } of shares) {
+      if (share === 0) continue;
+      settlements.push({
+        card,
+        amountYen: share,
+        date: transaction.date,
+        payee: transaction.payee,
+        transactionId: transaction.id,
+        isSplit: true,
+      });
+    }
   }
   return settlements;
 }
