@@ -69,8 +69,8 @@ export async function POST(request: Request) {
         targetDate: new Date(`${body.targetDate}T00:00:00.000Z`),
         currentSavedYen: Math.max(0, Math.round(body.currentSavedYen ?? 0)),
         monthlyAllocationYen: Math.max(0, Math.round(body.monthlyAllocationYen ?? 0)),
-        categoryId: body.categoryId || null,
-        fundingAccountId: body.fundingAccountId || null,
+        ...(body.categoryId ? { category: { connect: { id: body.categoryId } } } : {}),
+        ...(body.fundingAccountId ? { fundingAccount: { connect: { id: body.fundingAccountId } } } : {}),
       },
     });
     return Response.json({ goal: serialize(goal) }, { status: 201 });

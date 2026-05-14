@@ -39,16 +39,22 @@ export async function PUT(request: Request, context: RouteContext) {
     return Response.json({ error: "targetAmountYen must be a non-negative integer." }, { status: 400 });
   }
 
+  const data: Parameters<typeof prisma.savingsGoal.update>[0]["data"] = {
+    name: body.name?.trim() || undefined,
+    emoji: body.emoji?.trim() || undefined,
+    targetAmountYen: body.targetAmountYen === undefined ? undefined : Math.round(body.targetAmountYen),
+    targetDate: body.targetDate ? new Date(`${body.targetDate}T00:00:00`) : undefined,
+  };
+  if (body.categoryId !== undefined) {
+    data.category = body.categoryId ? { connect: { id: body.categoryId } } : { disconnect: true };
+  }
+  if (body.fundingAccountId !== undefined) {
+    data.fundingAccount = body.fundingAccountId ? { connect: { id: body.fundingAccountId } } : { disconnect: true };
+  }
+
   const goal = await prisma.savingsGoal.update({
     where: { id },
-    data: {
-      name: body.name?.trim() || undefined,
-      emoji: body.emoji?.trim() || undefined,
-      targetAmountYen: body.targetAmountYen === undefined ? undefined : Math.round(body.targetAmountYen),
-      targetDate: body.targetDate ? new Date(`${body.targetDate}T00:00:00`) : undefined,
-      categoryId: body.categoryId,
-      fundingAccountId: body.fundingAccountId === undefined ? undefined : (body.fundingAccountId || null),
-    },
+    data,
   });
 
   return Response.json({ goal: serializeGoal(goal) });
