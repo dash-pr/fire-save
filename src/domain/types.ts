@@ -79,6 +79,10 @@ export type CreditDebt = {
   categoryId?: string;
   type: DebtType;
   cardName: string;
+  /** Day-of-month the billing cycle opens, in the prior calendar month. Null = use heuristic. */
+  cycleStartDay?: number;
+  /** Day-of-month the billing cycle closes. Null = use heuristic. */
+  cycleEndDay?: number;
   description?: string;
   currentBalanceYen: Yen;
   originalAmountYen?: Yen;

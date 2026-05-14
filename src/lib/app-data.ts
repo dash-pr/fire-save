@@ -165,6 +165,8 @@ export async function loadAppInitialData(): Promise<AppInitialData> {
         originalAmountYen: debt.originalAmountYen ?? undefined,
         monthlyPaymentYen: debt.monthlyPaymentYen,
         paymentDueDay: debt.paymentDueDay,
+        cycleStartDay: debt.cycleStartDay ?? undefined,
+        cycleEndDay: debt.cycleEndDay ?? undefined,
         annualInterestRate: debt.annualInterestRate,
         monthlyInterestRate: debt.monthlyInterestRate,
         totalInstallments: debt.totalInstallments ?? undefined,

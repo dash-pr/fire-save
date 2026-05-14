@@ -231,13 +231,32 @@ export function buildCardCycleBreakdown(args: {
   const today = args.today ?? new Date();
   const cardDebts = args.debts.filter((d) => !d.isPaid && (d.accountId === args.card.id || d.cardName === args.card.name));
   const dueDay = (cardDebts.find((d) => d.paymentDueDay)?.paymentDueDay) ?? 27;
+  const cycleStartDay = cardDebts.find((d) => d.cycleStartDay !== undefined && d.cycleStartDay !== null)?.cycleStartDay;
+  const cycleEndDay = cardDebts.find((d) => d.cycleEndDay !== undefined && d.cycleEndDay !== null)?.cycleEndDay;
 
   const due = new Date(today.getFullYear(), today.getMonth(), dueDay);
   if (endOfDay(due).getTime() < today.getTime()) due.setMonth(due.getMonth() + 1);
-  const cycleEnd = new Date(due);
-  cycleEnd.setDate(cycleEnd.getDate() - 16);
-  const cycleStart = new Date(cycleEnd);
-  cycleStart.setDate(cycleStart.getDate() - 29);
+
+  // Prefer the per-card window (e.g. Saison 11→10, SMBC 1→last day of prev month). The cycle
+  // closes inside the *prior* calendar month relative to the due date.
+  let cycleStart: Date;
+  let cycleEnd: Date;
+  if (cycleStartDay !== undefined && cycleEndDay !== undefined) {
+    // The cycle ends in the month *before* the due date (when the due day is early-month, like
+    // Saison's 4th, the cycle closes in the prior calendar month). Walk back from the due date.
+    cycleEnd = new Date(due.getFullYear(), due.getMonth(), cycleEndDay);
+    if (cycleEnd.getTime() >= due.getTime()) cycleEnd.setMonth(cycleEnd.getMonth() - 1);
+    // cycleStartDay typically lives one calendar month before cycleEnd. If start > end (e.g.
+    // SMBC 1→31), the start is the same calendar month as cycleEnd. Otherwise it's one month back.
+    cycleStart = new Date(cycleEnd.getFullYear(), cycleEnd.getMonth(), cycleStartDay);
+    if (cycleStart.getTime() > cycleEnd.getTime()) cycleStart.setMonth(cycleStart.getMonth() - 1);
+  } else {
+    // Fall back to a ~26-day window ending one week before the due date — covers most JP cards.
+    cycleEnd = new Date(due);
+    cycleEnd.setDate(cycleEnd.getDate() - 7);
+    cycleStart = new Date(cycleEnd);
+    cycleStart.setDate(cycleStart.getDate() - 25);
+  }
   const daysUntilDue = Math.max(0, Math.ceil((due.getTime() - today.getTime()) / 86_400_000));
 
   const cycleStartIso = cycleStart.toISOString().slice(0, 10);

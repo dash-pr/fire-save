@@ -17,6 +17,8 @@ function parseDueDay(value: unknown) {
 function parseDebtBody(body: DebtBody) {
   if (body.type !== undefined && !debtTypes.has(body.type)) throw new Error("Invalid debt type.");
   const paymentDueDay = parseDueDay(body.paymentDueDay);
+  const cycleStartDay = parseDueDay(body.cycleStartDay);
+  const cycleEndDay = parseDueDay(body.cycleEndDay);
   return {
     accountId: body.accountId || null,
     categoryId: body.categoryId || null,
@@ -27,6 +29,8 @@ function parseDebtBody(body: DebtBody) {
     originalAmountYen: body.originalAmountYen === undefined ? undefined : Math.max(0, Math.round(body.originalAmountYen)),
     monthlyPaymentYen: body.monthlyPaymentYen === undefined ? undefined : Math.max(0, Math.round(body.monthlyPaymentYen)),
     paymentDueDay,
+    cycleStartDay,
+    cycleEndDay,
     annualInterestRate: body.annualInterestRate === undefined ? undefined : Math.max(0, body.annualInterestRate),
     monthlyInterestRate: body.monthlyInterestRate === undefined ? undefined : Math.max(0, body.monthlyInterestRate),
     totalInstallments: body.totalInstallments === undefined ? undefined : Math.max(0, Math.round(body.totalInstallments)),
@@ -46,6 +50,8 @@ function serializeDebt(debt: {
   originalAmountYen: number | null;
   monthlyPaymentYen: number;
   paymentDueDay: number | null;
+  cycleStartDay: number | null;
+  cycleEndDay: number | null;
   annualInterestRate: number;
   monthlyInterestRate: number;
   totalInstallments: number | null;
@@ -64,6 +70,8 @@ function serializeDebt(debt: {
     originalAmountYen: debt.originalAmountYen ?? undefined,
     monthlyPaymentYen: debt.monthlyPaymentYen,
     paymentDueDay: debt.paymentDueDay ?? undefined,
+    cycleStartDay: debt.cycleStartDay ?? undefined,
+    cycleEndDay: debt.cycleEndDay ?? undefined,
     annualInterestRate: debt.annualInterestRate,
     monthlyInterestRate: debt.monthlyInterestRate,
     totalInstallments: debt.totalInstallments ?? undefined,

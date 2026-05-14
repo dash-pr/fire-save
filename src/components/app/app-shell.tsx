@@ -2045,6 +2045,8 @@ function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOuts
             <CurrencyInput label="Monthly payment amount" value={draftDebt.monthlyPaymentYen} onChange={(value) => updateDraft({ monthlyPaymentYen: value })} />
             <PercentInput label="Monthly interest rate" value={draftDebt.monthlyInterestRate ?? draftDebt.annualInterestRate / 12} onChange={(value) => updateDraft({ monthlyInterestRate: value, annualInterestRate: value * 12 })} />
             <NumberInput label="Payment due day" value={draftDebt.paymentDueDay ?? 1} onChange={(value) => updateDraft({ paymentDueDay: value })} />
+            <NumberInput label="Cycle start day" value={draftDebt.cycleStartDay ?? 0} onChange={(value) => updateDraft({ cycleStartDay: value || undefined })} />
+            <NumberInput label="Cycle end day" value={draftDebt.cycleEndDay ?? 0} onChange={(value) => updateDraft({ cycleEndDay: value || undefined })} />
             {draftDebt.type === "installment" && <><NumberInput label="Total installments" value={draftDebt.totalInstallments ?? 0} onChange={(value) => updateDraft({ totalInstallments: value })} /><NumberInput label="Installments already paid" value={draftDebt.installmentsPaid ?? 0} onChange={(value) => updateDraft({ installmentsPaid: value })} /></>}
             {draftDebt.type === "lump_sum" && <TextInput label="Expected billing date" type="date" value={draftDebt.expectedBillingDate ?? ""} onChange={(value) => updateDraft({ expectedBillingDate: value })} />}
             <div className="md:col-span-2"><TextInput label="Optional notes" value={draftDebt.description ?? ""} onChange={(value) => updateDraft({ description: value })} /></div>
