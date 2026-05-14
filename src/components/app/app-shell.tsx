@@ -376,14 +376,7 @@ function HomePage({ readyToAssignYen, netWorthYen, savingsRate, fatfireAge, heal
 function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToAssignYen, budgetRows, fullBudgetRows, budgetFilter, setBudgetFilter, categoryGroups, categoryList, setCategories, transactions, setTransactions, budgetNotice, estimatedAssignments, setAssignment, assignments }: { month: string; setMonth: (month: string) => void; incomeEntries: IncomeEntry[]; setIncomeEntries: Dispatch<SetStateAction<IncomeEntry[]>>; readyToAssignYen: number; budgetRows: ReturnType<typeof buildBudgetRows>; fullBudgetRows: ReturnType<typeof buildBudgetRows>; budgetFilter: "all" | "overspent" | "underfunded" | "funded"; setBudgetFilter: (filter: "all" | "overspent" | "underfunded" | "funded") => void; categoryGroups: CategoryGroup[]; categoryList: Category[]; setCategories: Dispatch<SetStateAction<Category[]>>; transactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>>; budgetNotice: string | null; estimatedAssignments: Record<string, boolean>; setAssignment: (categoryId: string, value: number, isManuallySet?: boolean) => void; assignments: BudgetAssignment[] }) {
   const filters = ["all", "overspent", "underfunded", "funded"] as const;
   const [incomeCollapsed, setIncomeCollapsed] = useState(false);
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(() => {
-    if (typeof window === "undefined") return {};
-    try {
-      return JSON.parse(localStorage.getItem("fire-save-budget-collapsed-groups") ?? "{}") as Record<string, boolean>;
-    } catch {
-      return {};
-    }
-  });
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [activityCategoryId, setActivityCategoryId] = useState<string | null>(null);
   const [expenseDraft, setExpenseDraft] = useState({ payee: "", amountYen: 0 });
   const [expenseError, setExpenseError] = useState<string | null>(null);
@@ -392,9 +385,19 @@ function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToA
   const totalActivityYen = fullBudgetRows.reduce((total, row) => total + row.activityYen, 0);
   const overspentByYen = Math.max(0, totalActivityYen - totalIncomeYen);
 
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("fire-save-budget-collapsed-groups") ?? "{}") as Record<string, boolean>;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- persisted UI preferences must load after hydration to avoid SSR/client mismatch.
+      setCollapsedGroups(saved);
+    } catch {
+      // Ignore invalid saved UI preferences.
+    }
+  }, []);
+
   const persistCollapsedGroups = (next: Record<string, boolean>) => {
     setCollapsedGroups(next);
-    localStorage.setItem("fire-save-budget-collapsed-groups", JSON.stringify(next));
+    if (typeof window !== "undefined") localStorage.setItem("fire-save-budget-collapsed-groups", JSON.stringify(next));
   };
 
   const addIncomeRow = () => setIncomeEntries((previous) => [...previous, { id: makeLocalId("income"), month, sourceName: "Income", amountYen: 0 }]);
@@ -890,10 +893,13 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
 }
 
 function TransactionCategoryDonut({ transactions, categories }: { transactions: Transaction[]; categories: Category[] }) {
-  const [collapsed, setCollapsed] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("fire-save-tx-donut-collapsed") === "1";
-  });
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- persisted UI preferences must load after hydration to avoid SSR/client mismatch.
+    setCollapsed(localStorage.getItem("fire-save-tx-donut-collapsed") === "1");
+  }, []);
+
   const togglePanel = () => {
     setCollapsed((previous) => {
       const next = !previous;
@@ -940,8 +946,8 @@ function TransactionCategoryDonut({ transactions, categories }: { transactions: 
               <EmptyHint>No debit transactions this month yet.</EmptyHint>
             ) : (
               <div className="grid items-center gap-4 lg:grid-cols-[260px_1fr]">
-                <div className="relative h-[220px]">
-                  <ResponsiveContainer width="100%" height="100%">
+                <div className="relative h-[220px] min-w-0">
+                  <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
                     <PieChart>
                       <Pie data={data} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} stroke="none">
                         {data.map((entry) => (
@@ -1659,7 +1665,7 @@ function ReportsPage({ selectedMonth, transactions, incomeEntries, categories, a
   return (
     <div className="space-y-4">
       <ChartReportCard title="Monthly cash flow" hasEnoughData={hasEnoughData}>
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
           <BarChart data={cashFlowData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#F0EFEB" vertical={false} />
             <XAxis dataKey="month" tick={{ fill: "#6B7280", fontSize: 11 }} />
@@ -1672,7 +1678,7 @@ function ReportsPage({ selectedMonth, transactions, incomeEntries, categories, a
         </ResponsiveContainer>
       </ChartReportCard>
       <ChartReportCard title="Spending by category" hasEnoughData={hasEnoughData}>
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
           <BarChart data={categoryData} layout="vertical">
             <CartesianGrid strokeDasharray="3 3" stroke="#F0EFEB" horizontal={false} />
             <XAxis type="number" tickFormatter={compactCurrency} tick={{ fill: "#6B7280", fontSize: 11 }} />
@@ -1698,7 +1704,7 @@ function ReportsPage({ selectedMonth, transactions, incomeEntries, categories, a
         </Card>
       )}
       <ChartReportCard title="Net worth over time" hasEnoughData={hasEnoughData}>
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
           <AreaChart data={netWorthData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#F0EFEB" vertical={false} />
             <XAxis dataKey="month" tick={{ fill: "#6B7280", fontSize: 11 }} />
@@ -2168,7 +2174,7 @@ function FragmentGroup({ label, count, subtotal, isCollapsed, toggle, children }
 function ChartReportCard({ title, hasEnoughData, isLoading = false, children }: { title: string; hasEnoughData: boolean; isLoading?: boolean; children: ReactNode }) {
   return (
     <Card title={title} eyebrow="Last 6 months">
-      <div className="h-80">
+      <div className="h-80 min-w-0">
         {isLoading ? (
           <div className="h-full animate-pulse rounded-lg bg-[#E8E7E3]" />
         ) : !hasEnoughData ? (
