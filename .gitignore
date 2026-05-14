@@ -37,6 +37,7 @@ yarn-error.log*
 stashy_import.json
 stashy_import_final.json
 stashy_import_v2.json
+収入・支出詳細_*.csv
 
 # supabase local CLI state
 supabase/.branches/

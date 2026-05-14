@@ -164,10 +164,6 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
     }),
     [activeCategories, assignmentState, selectedMonth],
   );
-  const budgetRows = useMemo(
-    () => buildBudgetRows({ categories: activeCategories, assignments, transactions: transactionState, month: selectedMonth }),
-    [activeCategories, assignments, selectedMonth, transactionState],
-  );
   const ruledTransactions = useMemo(
     () => transactionState.map((transaction) => {
       if (transaction.categoryId) return transaction;
@@ -176,9 +172,13 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
     }),
     [merchantRuleState, transactionState],
   );
+  const budgetRows = useMemo(
+    () => buildBudgetRows({ categories: activeCategories, assignments, transactions: ruledTransactions, month: selectedMonth }),
+    [activeCategories, assignments, selectedMonth, ruledTransactions],
+  );
   const visibleBudgetRows = budgetRows.filter((row) => budgetFilter === "all" || row.status === budgetFilter);
   const readyToAssignYen = calculateReadyToAssignYen(incomeYen, assignments);
-  const totalExpensesYen = transactionState.filter((transaction) => transaction.type === "debit" && transaction.date.startsWith(selectedMonth)).reduce((total, transaction) => total + transaction.amountYen, 0);
+  const totalExpensesYen = ruledTransactions.filter((transaction) => transaction.type === "debit" && transaction.date.startsWith(selectedMonth)).reduce((total, transaction) => total + transaction.amountYen, 0);
   const savingsRate = calculateSavingsRate(incomeYen, totalExpensesYen);
   const netWorth = calculateNetWorth({ accounts: accountState, investments: investmentState, debts: debtState });
   const debtSummary = calculateDebtSummary(debtState);
@@ -198,17 +198,18 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
   // record yet, create one matching the activity total. If an existing record was never manually set,
   // refresh it to match current activity. Manually-set records are never overwritten.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- budget rows intentionally auto-fill after transaction/category changes.
     setAssignmentState((previous) => {
       let changed = false;
       const next = { ...previous };
       const seen = new Set<string>();
-      transactionState.forEach((transaction) => {
+      ruledTransactions.forEach((transaction) => {
         if (transaction.type !== "debit" || !transaction.categoryId) return;
         const month = transaction.date.slice(0, 7);
         const key = budgetKey(month, transaction.categoryId);
         if (seen.has(key)) return;
         seen.add(key);
-        const activity = calculateActivityYen(transactionState, transaction.categoryId, month);
+        const activity = calculateActivityYen(ruledTransactions, transaction.categoryId, month);
         const current = next[key];
         if (current?.isManuallySet) return;
         if (!current || current.assignedYen !== activity) {
@@ -218,7 +219,7 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
       });
       return changed ? next : previous;
     });
-  }, [transactionState]);
+  }, [ruledTransactions]);
 
   const setAssumption = (field: keyof ForecastInputs, value: string | number | boolean | undefined) => {
     setAssumptions((previous) => ({ ...previous, [field]: value }));
@@ -296,15 +297,15 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
 
           {activePage === "home" && <HomePage readyToAssignYen={readyToAssignYen} netWorthYen={netWorth.netWorthYen} savingsRate={savingsRate} fatfireAge={deterministic.estimatedFatfireAge} healthScore={health.score} uncategorizedCount={uncategorizedCount} overspentCount={overspentCount} contributionDeltaYen={deterministic.contributionDeltaYen} accounts={accountState} onNavigate={setActivePage} />}
 
-          {activePage === "budget" && <BudgetPage month={selectedMonth} setMonth={openBudgetMonth} incomeEntries={currentIncomeEntries} setIncomeEntries={setIncomeEntryState} readyToAssignYen={readyToAssignYen} budgetRows={visibleBudgetRows} fullBudgetRows={budgetRows} budgetFilter={budgetFilter} setBudgetFilter={setBudgetFilter} categoryGroups={categoryGroupState} categoryList={activeCategories} setCategories={setCategoryState} transactions={transactionState} setTransactions={setTransactionState} budgetNotice={budgetNotice} estimatedAssignments={estimatedAssignments} setAssignment={(categoryId, value, isManuallySet = true) => setAssignmentState((previous) => ({ ...previous, [budgetKey(selectedMonth, categoryId)]: { assignedYen: value, isManuallySet } }))} assignments={assignments} />}
+          {activePage === "budget" && <BudgetPage month={selectedMonth} setMonth={openBudgetMonth} incomeEntries={currentIncomeEntries} setIncomeEntries={setIncomeEntryState} readyToAssignYen={readyToAssignYen} budgetRows={visibleBudgetRows} fullBudgetRows={budgetRows} budgetFilter={budgetFilter} setBudgetFilter={setBudgetFilter} categoryGroups={categoryGroupState} categoryList={activeCategories} setCategories={setCategoryState} transactions={ruledTransactions} setTransactions={setTransactionState} budgetNotice={budgetNotice} estimatedAssignments={estimatedAssignments} setAssignment={(categoryId, value, isManuallySet = true) => setAssignmentState((previous) => ({ ...previous, [budgetKey(selectedMonth, categoryId)]: { assignedYen: value, isManuallySet } }))} assignments={assignments} />}
 
-          {activePage === "transactions" && <TransactionsPage key={`${transactionAccountFilterIds.join(",")}:${transactionCategoryFilterIds.join(",")}`} month={selectedMonth} setMonth={setSelectedMonth} transactions={ruledTransactions} rawTransactions={transactionState} setTransactions={setTransactionState} accounts={accountState} categories={activeCategories} merchantRules={merchantRuleState} setMerchantRules={setMerchantRuleState} initialAccountIds={transactionAccountFilterIds} initialCategoryIds={transactionCategoryFilterIds} />}
+          {activePage === "transactions" && <TransactionsPage key={`${transactionAccountFilterIds.join(",")}:${transactionCategoryFilterIds.join(",")}`} month={selectedMonth} setMonth={setSelectedMonth} transactions={ruledTransactions} rawTransactions={transactionState} setTransactions={setTransactionState} incomeEntries={incomeEntryState} accounts={accountState} categories={activeCategories} merchantRules={merchantRuleState} setMerchantRules={setMerchantRuleState} initialAccountIds={transactionAccountFilterIds} initialCategoryIds={transactionCategoryFilterIds} />}
           {activePage === "debt" && <DebtPage month={selectedMonth} debts={debtState} setDebts={setDebtState} totalMonthlyObligationYen={debtSummary.totalMonthlyObligationYen} totalOutstandingYen={debtSummary.totalOutstandingYen} categoryGroups={categoryGroupState} categories={activeCategories} setCategories={setCategoryState} transactions={transactionState} setTransactions={setTransactionState} />}
           {activePage === "goals" && <GoalsPage month={selectedMonth} goals={goalState} setGoals={setGoalState} assignments={assignments} setCategories={setCategoryState} transactions={transactionState} setTransactions={setTransactionState} />}
           {activePage === "investments" && <InvestmentsPage investments={investmentState} setInvestments={setInvestmentState} />}
           {activePage === "forecast" && <ForecastPage inputs={effectiveForecastInputs} assumptions={assumptions} setAssumption={setAssumption} />}
           {activePage === "reports" && <ReportsPage selectedMonth={selectedMonth} transactions={transactionState} incomeEntries={incomeEntryState} categories={activeCategories} accounts={accountState} investments={investmentState} debts={debtState} onCategoryClick={(categoryId) => { setTransactionCategoryFilterIds([categoryId]); setActivePage("transactions"); }} />}
-          {activePage === "import" && <ImportPage />}
+          {activePage === "import" && <ImportPage setAccounts={setAccountState} setCategories={setCategoryState} setIncomeEntries={setIncomeEntryState} setTransactions={setTransactionState} />}
           {activePage === "settings" && <SettingsPage assumptions={assumptions} setAssumption={setAssumption} accounts={accountState} setAccounts={setAccountState} investments={investmentState} setInvestments={setInvestmentState} debts={debtState} setDebts={setDebtState} goals={goalState} setGoals={setGoalState} categories={activeCategories} merchantRules={merchantRuleState} setMerchantRules={setMerchantRuleState} />}
         </main>
       </div>
@@ -560,40 +561,104 @@ type TransactionFilterState = {
   type: "all" | "debit" | "credit";
 };
 
-function TransactionsPage({ month, setMonth, transactions, rawTransactions, setTransactions, accounts, categories, merchantRules, setMerchantRules, initialAccountIds, initialCategoryIds }: { month: string; setMonth: (month: string) => void; transactions: Transaction[]; rawTransactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>>; accounts: Account[]; categories: Category[]; merchantRules: MerchantRule[]; setMerchantRules: Dispatch<SetStateAction<MerchantRule[]>>; initialAccountIds: string[]; initialCategoryIds: string[] }) {
+type TransactionLedgerRow = {
+  id: string;
+  kind: "transaction" | "income";
+  transaction?: Transaction;
+  incomeEntry?: IncomeEntry;
+  accountId?: string;
+  categoryId?: string;
+  date: string;
+  payee: string;
+  memo?: string;
+  amountYen: number;
+  type: "debit" | "credit";
+  source: Transaction["source"] | "income";
+};
+
+function TransactionsPage({ month, setMonth, transactions, rawTransactions, setTransactions, incomeEntries, accounts, categories, merchantRules, setMerchantRules, initialAccountIds, initialCategoryIds }: { month: string; setMonth: (month: string) => void; transactions: Transaction[]; rawTransactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>>; incomeEntries: IncomeEntry[]; accounts: Account[]; categories: Category[]; merchantRules: MerchantRule[]; setMerchantRules: Dispatch<SetStateAction<MerchantRule[]>>; initialAccountIds: string[]; initialCategoryIds: string[] }) {
   const [filters, setFilters] = useState<TransactionFilterState>({ search: "", accountIds: initialAccountIds, categoryIds: initialCategoryIds, type: "all" });
   const [groupBy, setGroupBy] = useState<"none" | "category" | "date">("none");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [inlineMessage, setInlineMessage] = useState<string | null>(null);
+  const [savingTransactionIds, setSavingTransactionIds] = useState<Record<string, boolean>>({});
+  const [pendingDeleteTransaction, setPendingDeleteTransaction] = useState<Transaction | null>(null);
+  const [isDeletingTransaction, setIsDeletingTransaction] = useState(false);
   const monthTransactions = transactions.filter((transaction) => transaction.date.startsWith(month));
+  const monthIncomeRows = useMemo<TransactionLedgerRow[]>(() => {
+    // Income entries are often imported alongside the matching credit transaction (same amount in
+    // the same month). Payee strings don't always align (Japanese bank record vs. English income
+    // label), so match on amount alone within the month — that is enough to avoid double-counting.
+    const creditAmounts = new Map<number, number>();
+    monthTransactions.filter((transaction) => transaction.type === "credit").forEach((transaction) => {
+      creditAmounts.set(transaction.amountYen, (creditAmounts.get(transaction.amountYen) ?? 0) + 1);
+    });
+    return incomeEntries
+      .filter((entry) => entry.month === month)
+      .filter((entry) => {
+        const remaining = creditAmounts.get(entry.amountYen) ?? 0;
+        if (remaining > 0) {
+          creditAmounts.set(entry.amountYen, remaining - 1);
+          return false;
+        }
+        return true;
+      })
+      .map((entry) => ({
+        id: `income:${entry.id}`,
+        kind: "income" as const,
+        incomeEntry: entry,
+        date: `${entry.month}-01`,
+        payee: entry.sourceName,
+        memo: "Monthly income entry",
+        amountYen: entry.amountYen,
+        type: "credit" as const,
+        source: "income" as const,
+      }));
+  }, [incomeEntries, month, monthTransactions]);
+  const ledgerRows = useMemo<TransactionLedgerRow[]>(() => [
+    ...monthTransactions.map((transaction) => ({
+      id: transaction.id,
+      kind: "transaction" as const,
+      transaction,
+      accountId: transaction.accountId,
+      categoryId: transaction.categoryId,
+      date: transaction.date,
+      payee: transaction.payee,
+      memo: transaction.memo,
+      amountYen: transaction.amountYen,
+      type: transaction.type,
+      source: transaction.source,
+    })),
+    ...monthIncomeRows,
+  ].sort((a, b) => b.date.localeCompare(a.date) || a.payee.localeCompare(b.payee)), [monthIncomeRows, monthTransactions]);
   const filteredTransactions = useMemo(() => {
     const search = normalizeMerchant(filters.search);
-    return monthTransactions.filter((transaction) => {
+    return ledgerRows.filter((transaction) => {
       const matchesSearch = !search || normalizeMerchant(`${transaction.payee} ${transaction.memo ?? ""}`).includes(search);
-      const matchesAccount = filters.accountIds.length === 0 || filters.accountIds.includes(transaction.accountId);
-      const matchesCategory = filters.categoryIds.length === 0 || (transaction.categoryId ? filters.categoryIds.includes(transaction.categoryId) : filters.categoryIds.includes("uncategorized"));
+      const matchesAccount = transaction.kind === "income" ? filters.accountIds.length === 0 : filters.accountIds.length === 0 || (transaction.accountId ? filters.accountIds.includes(transaction.accountId) : false);
+      const matchesCategory = filters.categoryIds.length === 0 || (transaction.kind === "income" ? filters.categoryIds.includes("income") : transaction.categoryId ? filters.categoryIds.includes(transaction.categoryId) : filters.categoryIds.includes("uncategorized"));
       const matchesType = filters.type === "all" || transaction.type === filters.type;
       return matchesSearch && matchesAccount && matchesCategory && matchesType;
     });
-  }, [filters, monthTransactions]);
+  }, [filters, ledgerRows]);
   const stats = {
     totalIn: filteredTransactions.filter((transaction) => transaction.type === "credit").reduce((total, transaction) => total + transaction.amountYen, 0),
     totalOut: filteredTransactions.filter((transaction) => transaction.type === "debit").reduce((total, transaction) => total + transaction.amountYen, 0),
     count: filteredTransactions.length,
-    uncategorized: filteredTransactions.filter((transaction) => !transaction.categoryId).length,
+    uncategorized: filteredTransactions.filter((transaction) => transaction.kind === "transaction" && !transaction.categoryId).length,
   };
   const grouped = useMemo(() => {
     if (groupBy === "none") return [{ key: "all", label: "All Transactions", rows: filteredTransactions }];
-    const groups = new Map<string, Transaction[]>();
+    const groups = new Map<string, TransactionLedgerRow[]>();
     filteredTransactions.forEach((transaction) => {
-      const key = groupBy === "category" ? transaction.categoryId ?? "uncategorized" : weekOfMonth(transaction.date);
+      const key = groupBy === "category" ? (transaction.kind === "income" ? "income" : transaction.categoryId ?? "uncategorized") : weekOfMonth(transaction.date);
       groups.set(key, [...(groups.get(key) ?? []), transaction]);
     });
     return Array.from(groups.entries()).map(([key, rows]) => {
       const categoryName = categories.find((category) => category.id === key)?.name;
       return {
         key,
-        label: groupBy === "category" ? (categoryName ? getCategoryDisplayName(categoryName) : "Uncategorized") : key,
+        label: groupBy === "category" ? (key === "income" ? "Income" : categoryName ? getCategoryDisplayName(categoryName) : "Uncategorized") : key,
         rows,
       };
     });
@@ -604,20 +669,31 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
     [field]: previous[field].includes(value) ? previous[field].filter((item) => item !== value) : [...previous[field], value],
   }));
 
-  const updateCategory = (transaction: Transaction, categoryId: string) => {
-    const previousMerchantCategory = rawTransactions.find((item) => item.id !== transaction.id && item.categoryId && normalizeMerchant(item.payee) === normalizeMerchant(transaction.payee))?.categoryId;
-    const finalCategoryId = previousMerchantCategory ?? categoryId;
+  const updateCategory = async (transaction: Transaction, categoryId: string) => {
+    const finalCategoryId = categoryId || undefined;
+    const previousTransactions = rawTransactions;
     setTransactions((previous) => previous.map((item) => item.id === transaction.id ? { ...item, categoryId: finalCategoryId } : item));
-    if (previousMerchantCategory && previousMerchantCategory !== categoryId) {
-      const categoryName = categories.find((category) => category.id === previousMerchantCategory)?.name;
-      const displayCategoryName = categoryName ? getCategoryDisplayName(categoryName) : "previous category";
-      setInlineMessage(`${transaction.payee} was previously categorized as ${displayCategoryName}; previous category auto-applied.`);
-    } else {
-      setInlineMessage(null);
+    setSavingTransactionIds((previous) => ({ ...previous, [transaction.id]: true }));
+    setInlineMessage(null);
+    try {
+      const response = await fetch(`/api/transactions/${transaction.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ categoryId: finalCategoryId ?? null }),
+      });
+      if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "Failed to update transaction.");
+      const payload = await response.json() as { transaction: Transaction };
+      setTransactions((previous) => previous.map((item) => item.id === transaction.id ? payload.transaction : item));
+      setInlineMessage("Transaction saved. Budget and debt views updated.");
+    } catch (error) {
+      setTransactions(previousTransactions);
+      setInlineMessage(error instanceof Error ? error.message : "Failed to update transaction.");
+    } finally {
+      setSavingTransactionIds((previous) => ({ ...previous, [transaction.id]: false }));
     }
   };
 
-  const addMerchantRule = (transaction: Transaction) => {
+  const addMerchantRule = async (transaction: Transaction) => {
     if (!transaction.categoryId) {
       setInlineMessage("Choose a category before creating a merchant rule.");
       return;
@@ -627,10 +703,39 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
       setInlineMessage("A merchant rule already exists for this payee.");
       return;
     }
-    const rule: MerchantRule = { id: makeLocalId("rule"), pattern: transaction.payee, categoryName: categories.find((category) => category.id === transaction.categoryId)?.name ?? "Uncategorized", categoryId: transaction.categoryId, fuzzyMatch: true, createdAt: new Date().toISOString() };
-    setMerchantRules((previous) => [...previous, rule]);
-    setTransactions((previous) => previous.map((item) => matchesMerchantRule(item.payee, rule) ? { ...item, categoryId: rule.categoryId } : item));
-    setInlineMessage(`Always categorize ${transaction.payee} rule created.`);
+    try {
+      const response = await fetch("/api/merchant-rules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pattern: transaction.payee, categoryId: transaction.categoryId, fuzzyMatch: true }),
+      });
+      if (!response.ok) throw new Error((await response.json() as { error?: string }).error ?? "Failed to create merchant rule.");
+      const payload = await response.json() as { rule: MerchantRule };
+      setMerchantRules((previous) => [...previous, payload.rule]);
+      setTransactions((previous) => previous.map((item) => matchesMerchantRule(item.payee, payload.rule) ? { ...item, categoryId: payload.rule.categoryId } : item));
+      setInlineMessage(`Always categorize ${transaction.payee} rule created. Budget updated.`);
+    } catch (error) {
+      setInlineMessage(error instanceof Error ? error.message : "Failed to create merchant rule.");
+    }
+  };
+
+  const confirmDeleteTransaction = async () => {
+    if (!pendingDeleteTransaction) return;
+    setIsDeletingTransaction(true);
+    setInlineMessage(null);
+    try {
+      const response = await fetch(`/api/transactions/${pendingDeleteTransaction.id}`, { method: "DELETE" });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(payload.error ?? "Failed to delete transaction.");
+      }
+      setTransactions((previous) => previous.filter((item) => item.id !== pendingDeleteTransaction.id));
+      setPendingDeleteTransaction(null);
+    } catch (error) {
+      setInlineMessage(error instanceof Error ? error.message : "Failed to delete transaction.");
+    } finally {
+      setIsDeletingTransaction(false);
+    }
   };
 
   const netYen = stats.totalIn - stats.totalOut;
@@ -682,6 +787,10 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
               <input type="checkbox" checked={filters.categoryIds.includes("uncategorized")} onChange={() => toggleFilterValue("categoryIds", "uncategorized")} className="accent-[#4A7CFF]" />
               <span>Uncategorized</span>
             </label>
+            <label className="flex items-center gap-2 rounded px-1 py-0.5 hover:bg-[#FAFAF8]">
+              <input type="checkbox" checked={filters.categoryIds.includes("income")} onChange={() => toggleFilterValue("categoryIds", "income")} className="accent-[#4A7CFF]" />
+              <span>Income</span>
+            </label>
           </FilterChecklist>
           <SelectField label="Type" value={filters.type} onChange={(value) => setFilters((previous) => ({ ...previous, type: value as TransactionFilterState["type"] }))}>
             <option value="all">All</option>
@@ -698,8 +807,8 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
       </Card>
 
       <Card title="Transactions" eyebrow="Categorize and review">
-        {monthTransactions.length === 0 ? (
-          <EmptyHint>No transactions yet this month. Import from your bank statement or add one manually.</EmptyHint>
+        {ledgerRows.length === 0 ? (
+          <EmptyHint>No transactions or income entries yet this month. Import from your bank statement or add one manually.</EmptyHint>
         ) : (
           <div className="overflow-hidden">
             <table className="w-full text-sm">
@@ -719,21 +828,35 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
                   const isCollapsed = collapsed[group.key] ?? false;
                   const content = group.rows.map((transaction) => {
                     const category = categories.find((c) => c.id === transaction.categoryId);
+                    const originalTransaction = transaction.transaction;
                     return (
-                      <tr key={transaction.id} className={`border-b border-[#F0EFEB] transition hover:bg-[#FAFAF8] ${transaction.categoryId ? "" : "bg-[#FBEFD9]/40"}`}>
+                      <tr key={transaction.id} className={`group border-b border-[#F0EFEB] transition hover:bg-[#FAFAF8] ${transaction.kind === "income" || transaction.categoryId ? "" : "bg-[#FBEFD9]/40"}`}>
                         <td className="py-2 pr-4 text-xs tabular-nums text-[#6B7280]">{transaction.date}</td>
                         <td className="py-2 pr-4">
                           <MerchantLabel payee={transaction.payee} memo={transaction.memo ?? null} />
                         </td>
-                        <td className="py-2 pr-4 text-xs text-[#6B7280]">{(() => { const acct = accounts.find((account) => account.id === transaction.accountId); return acct ? getAccountDisplayNames(acct.name).primary : "Unknown"; })()}</td>
+                        <td className="py-2 pr-4 text-xs text-[#6B7280]">{transaction.kind === "income" ? "Income" : (() => { const acct = accounts.find((account) => account.id === transaction.accountId); return acct ? getAccountDisplayNames(acct.name).primary : "Unknown"; })()}</td>
                         <td className="py-2 pr-4">
-                          <CategoryPicker value={transaction.categoryId ?? ""} onChange={(value) => updateCategory(transaction, value)} options={categories} currentName={category?.name} />
+                          {originalTransaction ? <CategoryPicker value={transaction.categoryId ?? ""} onChange={(value) => updateCategory(originalTransaction, value)} options={categories} currentName={category?.name} /> : <span className="rounded-full bg-[#E8F5EE] px-2.5 py-0.5 text-[11px] font-medium text-[#2F7A58]">Income</span>}
                         </td>
                         <td className="py-2 pr-4">
-                          <button type="button" onClick={() => addMerchantRule(transaction)} className="rounded-md px-2 py-0.5 text-[11px] font-medium text-[#6B7280] transition hover:bg-[#EEEDE9] hover:text-slate-900" title={`Always categorize ${transaction.payee} this way`}>Always</button>
+                          {originalTransaction && <button type="button" onClick={() => addMerchantRule(originalTransaction)} disabled={savingTransactionIds[originalTransaction.id]} className="rounded-md px-2 py-0.5 text-[11px] font-medium text-[#6B7280] transition hover:bg-[#EEEDE9] hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50" title={`Always categorize ${transaction.payee} this way`}>{savingTransactionIds[originalTransaction.id] ? "Saving" : "Always"}</button>}
                         </td>
                         <td className={`py-2 pr-0 text-right text-sm tabular-nums ${transaction.type === "credit" ? "text-[#2F7A58]" : "text-[#E5534B]"}`}>
-                          {transaction.type === "credit" ? "+" : "−"}{formatJPY(transaction.amountYen)}
+                          <div className="flex items-center justify-end gap-2">
+                            <span>{transaction.type === "credit" ? "+" : "−"}{formatJPY(transaction.amountYen)}</span>
+                            {originalTransaction && (
+                              <button
+                                type="button"
+                                onClick={() => setPendingDeleteTransaction(originalTransaction)}
+                                aria-label={`Delete ${transaction.payee}`}
+                                title="Delete transaction"
+                                className="rounded p-0.5 text-[#6B7280] opacity-0 transition group-hover:opacity-100 hover:bg-[#FBE5E3] hover:text-[#E5534B]"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -750,6 +873,18 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
           </div>
         )}
       </Card>
+
+      {pendingDeleteTransaction && (
+        <Modal onClose={() => { if (!isDeletingTransaction) setPendingDeleteTransaction(null); }} title="Delete this transaction?" width="420px">
+          <p className="text-sm leading-relaxed text-[#6B7280]">
+            <span className="text-slate-900">{pendingDeleteTransaction.payee}</span> · <span className="tabular-nums text-slate-900">{formatJPY(pendingDeleteTransaction.amountYen)}</span> on <span className="tabular-nums">{pendingDeleteTransaction.date}</span> will be removed. Budgets and reports update immediately. This cannot be undone.
+          </p>
+          <div className="mt-5 grid grid-cols-2 gap-3">
+            <button type="button" onClick={() => setPendingDeleteTransaction(null)} disabled={isDeletingTransaction} className="rounded-lg bg-[#F5F4F0] px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-[#EEEDE9] disabled:cursor-not-allowed disabled:opacity-60">Cancel</button>
+            <button type="button" onClick={confirmDeleteTransaction} disabled={isDeletingTransaction} className="rounded-lg bg-[#E5534B] px-4 py-2.5 text-sm font-medium text-white hover:bg-[#CE4842] disabled:cursor-not-allowed disabled:opacity-60">{isDeletingTransaction ? "Deleting..." : "Delete"}</button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -861,6 +996,16 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: "su
     <div className="flex flex-col">
       <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">{label}</span>
       <span className={`text-sm font-medium tabular-nums ${color}`}>{value}</span>
+    </div>
+  );
+}
+
+function StatCard({ label, value, detail }: { label: string; value: string; detail?: string }) {
+  return (
+    <div className="rounded-xl bg-[#FAFAF8] p-3">
+      <p className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">{label}</p>
+      <p className="mt-1 text-2xl font-medium tabular-nums text-slate-900">{value}</p>
+      {detail && <p className="mt-1 text-xs leading-relaxed text-[#6B7280]">{detail}</p>}
     </div>
   );
 }
@@ -1571,13 +1716,104 @@ function ReportsPage({ selectedMonth, transactions, incomeEntries, categories, a
   );
 }
 
-function ImportPage() {
+type MoneyForwardImportResponse = {
+  mode: "preview" | "import";
+  summary: {
+    parsedRows: number;
+    importableTransactions: number;
+    importedTransactions: number;
+    duplicateTransactions: number;
+    importableIncomeEntries: number;
+    importedIncomeEntries: number;
+    duplicateIncomeEntries: number;
+    createdAccounts: number;
+    createdCategories: number;
+    transferRows: number;
+    aiCategorizedRows: number;
+  };
+  errors: string[];
+  transactions: Transaction[];
+  incomeEntries: IncomeEntry[];
+  accounts: Account[];
+  categories: Category[];
+};
+
+function ImportPage({ setAccounts, setCategories, setIncomeEntries, setTransactions }: { setAccounts: Dispatch<SetStateAction<Account[]>>; setCategories: Dispatch<SetStateAction<Category[]>>; setIncomeEntries: Dispatch<SetStateAction<IncomeEntry[]>>; setTransactions: Dispatch<SetStateAction<Transaction[]>> }) {
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [csvText, setCsvText] = useState("");
+  const [isPreviewing, setIsPreviewing] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [result, setResult] = useState<MoneyForwardImportResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const readFile = async (file: File) => {
+    setFileName(file.name);
+    setResult(null);
+    setError(null);
+    setCsvText(await file.text());
+  };
+
+  const submit = async (mode: "preview" | "import") => {
+    if (!csvText.trim()) {
+      setError("Choose a MoneyForward CSV file first.");
+      return;
+    }
+    setError(null);
+    if (mode === "preview") setIsPreviewing(true);
+    else setIsImporting(true);
+    try {
+      const response = await fetch("/api/import/moneyforward", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ csvText, mode }),
+      });
+      const payload = await response.json() as MoneyForwardImportResponse & { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "MoneyForward import failed.");
+      setResult(payload);
+      if (mode === "import") {
+        setAccounts((previous) => [...previous, ...payload.accounts.filter((account) => !previous.some((item) => item.id === account.id))]);
+        setCategories((previous) => [...previous, ...payload.categories.filter((category) => !previous.some((item) => item.id === category.id))]);
+        setIncomeEntries((previous) => [...previous, ...payload.incomeEntries.filter((entry) => !previous.some((item) => item.id === entry.id))]);
+        setTransactions((previous) => [...previous, ...payload.transactions.filter((transaction) => !previous.some((item) => item.id === transaction.id))]);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "MoneyForward import failed.");
+    } finally {
+      setIsPreviewing(false);
+      setIsImporting(false);
+    }
+  };
+
   return (
-    <section className="grid gap-4 xl:grid-cols-3">
-      <WorkflowCard icon={<UploadCloud className="h-4 w-4" />} title="Upload statement or CSV" detail="Supports JPG, PNG, PDF, and CSV files within Supabase free-tier storage limits." />
-      <WorkflowCard icon={<CheckCircle2 className="h-4 w-4" />} title="Review extracted transactions" detail="Japanese dates and integer JPY amounts are normalized before confirmation." />
-      <WorkflowCard icon={<Bot className="h-4 w-4" />} title="Generate monthly insight" detail="Insights use aggregated monthly summaries only and are cached by month." />
-    </section>
+    <div className="space-y-4">
+      <section className="grid gap-4 xl:grid-cols-3">
+        <WorkflowCard icon={<UploadCloud className="h-4 w-4" />} title="Upload MoneyForward CSV" detail="Uses the Japanese 収入・支出詳細 CSV columns and keeps card transfers, fees, ribo payments, and paid-in-full rows." />
+        <WorkflowCard icon={<CheckCircle2 className="h-4 w-4" />} title="Skip duplicates" detail="Checks MoneyForward IDs, exact transaction keys, prior income entries, and overlapping PDF statement rows before inserting." />
+        <WorkflowCard icon={<Bot className="h-4 w-4" />} title="Categorize safely" detail="Uses merchant rules and past categorization first; OpenAI is only used when an API key is available." />
+      </section>
+
+      <Card title="MoneyForward CSV import" eyebrow="収入・支出詳細">
+        <div className="grid gap-4 xl:grid-cols-[1fr_auto_auto] xl:items-end">
+          <Field label="CSV file">
+            <input type="file" accept=".csv,text/csv" onChange={(event) => { const file = event.target.files?.[0]; if (file) void readFile(file); }} className="w-full rounded-md border border-[#E8E7E3] bg-white px-3 py-2 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-[#F5F4F0] file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-[#EEEDE9]" />
+          </Field>
+          <button type="button" onClick={() => void submit("preview")} disabled={!csvText || isPreviewing || isImporting} className="rounded-lg bg-[#F5F4F0] px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-[#EEEDE9] disabled:cursor-not-allowed disabled:opacity-60">{isPreviewing ? "Checking..." : "Check duplicates"}</button>
+          <button type="button" onClick={() => void submit("import")} disabled={!csvText || isPreviewing || isImporting} className="rounded-lg bg-[#4A7CFF] px-4 py-2.5 text-sm font-medium text-white hover:bg-[#3F6DE8] disabled:cursor-not-allowed disabled:opacity-60">{isImporting ? "Importing..." : "Import new rows"}</button>
+        </div>
+        {fileName && <p className="mt-3 text-xs text-[#6B7280]">Selected file: <span className="font-medium text-slate-900">{fileName}</span></p>}
+        {error && <p className="mt-3 rounded-md bg-[#FBE5E3] px-3 py-2 text-xs text-[#A32D27]">{error}</p>}
+        {result && (
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <StatCard label="Parsed rows" value={`${result.summary.parsedRows}`} />
+            <StatCard label={result.mode === "import" ? "Transactions imported" : "Transactions to import"} value={`${result.mode === "import" ? result.summary.importedTransactions : result.summary.importableTransactions}`} detail={`${result.summary.duplicateTransactions} duplicate transactions skipped`} />
+            <StatCard label={result.mode === "import" ? "Income entries imported" : "Income entries to import"} value={`${result.mode === "import" ? result.summary.importedIncomeEntries : result.summary.importableIncomeEntries}`} detail={`${result.summary.duplicateIncomeEntries} duplicate income entries skipped`} />
+            <StatCard label="Transfers included" value={`${result.summary.transferRows}`} detail={`${result.summary.createdAccounts} accounts · ${result.summary.createdCategories} categories`} />
+            {result.summary.aiCategorizedRows > 0 && <StatCard label="AI categorized" value={`${result.summary.aiCategorizedRows}`} detail="OpenAI was available for unmatched rows" />}
+          </div>
+        )}
+        {result?.errors.length ? <p className="mt-3 rounded-md bg-[#FBEFD9] px-3 py-2 text-xs text-[#8A5A10]">{result.errors.length} CSV row warnings were ignored. Valid rows can still be imported.</p> : null}
+      </Card>
+    </div>
   );
 }
 
