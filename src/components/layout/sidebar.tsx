@@ -8,7 +8,6 @@ import {
   Flag,
   Home,
   LineChart,
-  PiggyBank,
   Plus,
   ReceiptText,
   Settings,
@@ -20,6 +19,7 @@ import type { Account, Investment } from "@/domain/types";
 import { formatJPY } from "@/lib/format";
 import { getAccountDisplayNames } from "@/lib/accounts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { UserMenu, type AppUser } from "@/components/app/user-menu";
 
 const nav = [
   { key: "home", label: "Home", icon: Home },
@@ -34,6 +34,7 @@ const nav = [
 ];
 
 export function Sidebar({
+  user,
   accounts,
   investments,
   netWorthYen,
@@ -43,6 +44,7 @@ export function Sidebar({
   onEditAccount,
   onSelectAccount,
 }: {
+  user: AppUser;
   accounts: Account[];
   investments: Investment[];
   netWorthYen: number;
@@ -75,13 +77,10 @@ export function Sidebar({
   return (
     <TooltipProvider delayDuration={250}>
       <aside className="hidden min-h-screen w-[260px] shrink-0 flex-col bg-[#1C1F3A] px-4 py-5 text-white lg:flex">
-        <div className="flex items-center gap-2.5 px-3">
-          <div className="grid h-8 w-8 place-items-center rounded-lg bg-white/10">
-            <PiggyBank className="h-4 w-4" />
-          </div>
-          <div>
-            <p className="text-sm font-medium leading-tight">FATFire Planner</p>
-            <p className="text-[11px] text-[#8B90B0]">Local MVP · JPY</p>
+        <div className="px-1">
+          <p className="px-2 text-base font-medium tracking-wide text-white">Stashy</p>
+          <div className="mt-3">
+            <UserMenu user={user} />
           </div>
         </div>
 

@@ -20,6 +20,7 @@ import {
 import { Bot, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Pencil, Plus, SlidersHorizontal, Trash2, UploadCloud, X } from "lucide-react";
 import { Sidebar } from "@/components/layout/sidebar";
 import { WelcomeToast } from "@/components/app/welcome-toast";
+import type { AppUser } from "@/components/app/user-menu";
 import { Card, MetricCard } from "@/components/shared/card";
 import { ProgressBar, StatusPill } from "@/components/shared/progress";
 import {
@@ -111,7 +112,7 @@ function pathnameToPageKey(pathname: string | null): PageKey {
   return (PAGE_KEYS.includes(key as PageKey) ? key : "budget") as PageKey;
 }
 
-export default function AppShell({ initialData }: { children?: ReactNode; initialData: AppInitialData }) {
+export default function AppShell({ initialData, user }: { children?: ReactNode; initialData: AppInitialData; user: AppUser }) {
   const router = useRouter();
   const pathname = usePathname();
   const activePage = pathnameToPageKey(pathname);
@@ -242,7 +243,7 @@ export default function AppShell({ initialData }: { children?: ReactNode; initia
     <div className="min-h-screen bg-[#F5F4F0] text-slate-900">
       <WelcomeToast />
       <div className="flex">
-        <Sidebar accounts={accountState} investments={investmentState} netWorthYen={netWorth.netWorthYen} activePage={activePage} onNavigate={(pageKey) => setActivePage(pageKey as PageKey)} onAddAccount={(account) => setAccountState((previous) => [...previous, account])} onEditAccount={(id, changes) => setAccountState((previous) => previous.map((account) => account.id === id ? { ...account, ...changes } : account))} onSelectAccount={(accountId) => { setTransactionAccountFilterIds([accountId]); setActivePage("transactions"); }} />
+        <Sidebar user={user} accounts={accountState} investments={investmentState} netWorthYen={netWorth.netWorthYen} activePage={activePage} onNavigate={(pageKey) => setActivePage(pageKey as PageKey)} onAddAccount={(account) => setAccountState((previous) => [...previous, account])} onEditAccount={(id, changes) => setAccountState((previous) => previous.map((account) => account.id === id ? { ...account, ...changes } : account))} onSelectAccount={(accountId) => { setTransactionAccountFilterIds([accountId]); setActivePage("transactions"); }} />
         <main className="min-w-0 flex-1 px-8 py-8">
           <header className="mb-6 flex items-start justify-between gap-4">
             <div>
