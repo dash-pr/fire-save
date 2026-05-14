@@ -26,11 +26,8 @@ import { WelcomeToast } from "@/components/app/welcome-toast";
 import type { AppUser } from "@/components/app/user-menu";
 import { Card, MetricCard } from "@/components/shared/card";
 import { ProgressBar, StatusPill } from "@/components/shared/progress";
-import {
-  nisaContributions,
-  savingsGoals,
-} from "@/data/sample-data";
-import { buildBudgetRows, calculateActivityYen, calculateReadyToAssignYen, calculateSavingsRate, sortBudgetRowsByActivity } from "@/domain/budget";
+import { nisaContributions } from "@/data/sample-data";
+import { buildBudgetRows, calculateActivityYen, calculateReadyToAssignYen, calculateSavingsRate, sortBudgetRowsByActivity, suggestedMonthlyForGoal } from "@/domain/budget";
 import { calculateBunkatsuRemaining, calculateDebtSummary, calculateRiboPayoff, normalizeInterestRate } from "@/domain/debt";
 import {
   calculateAgeFromDob,
@@ -140,7 +137,7 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
   const [estimatedAssignments, setEstimatedAssignments] = useState<Record<string, boolean>>({});
   const [budgetNotice, setBudgetNotice] = useState<string | null>(null);
   const [debtState, setDebtState] = useState<CreditDebt[]>(initialData.debts);
-  const [goalState, setGoalState] = useState<SavingsGoal[]>(savingsGoals);
+  const [goalState, setGoalState] = useState<SavingsGoal[]>(initialData.goals);
   const [investmentState, setInvestmentState] = useState<Investment[]>(initialData.investments);
   const [assumptions, setAssumptions] = useState<ForecastInputs>(initialData.forecastInputs);
   const [budgetFilter, setBudgetFilter] = useState<"all" | "overspent" | "underfunded" | "funded">("all");
@@ -173,8 +170,8 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
     [merchantRuleState, transactionState],
   );
   const budgetRows = useMemo(
-    () => buildBudgetRows({ categories: activeCategories, assignments, transactions: ruledTransactions, month: selectedMonth }),
-    [activeCategories, assignments, selectedMonth, ruledTransactions],
+    () => buildBudgetRows({ categories: activeCategories, assignments, transactions: ruledTransactions, month: selectedMonth, goals: goalState }),
+    [activeCategories, assignments, selectedMonth, ruledTransactions, goalState],
   );
   const visibleBudgetRows = budgetRows.filter((row) => budgetFilter === "all" || row.status === budgetFilter);
   const readyToAssignYen = calculateReadyToAssignYen(incomeYen, assignments);
@@ -203,8 +200,12 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
       let changed = false;
       const next = { ...previous };
       const seen = new Set<string>();
+      const goalCategoryIds = new Set(goalState.map((goal) => goal.categoryId).filter(Boolean) as string[]);
       ruledTransactions.forEach((transaction) => {
         if (transaction.type !== "debit" || !transaction.categoryId) return;
+        // Goal-linked categories are funded via the goal auto-assign effect below — do not let
+        // spend-based logic touch them (they normally have zero debit activity anyway).
+        if (goalCategoryIds.has(transaction.categoryId)) return;
         const month = transaction.date.slice(0, 7);
         const key = budgetKey(month, transaction.categoryId);
         if (seen.has(key)) return;
@@ -219,7 +220,46 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
       });
       return changed ? next : previous;
     });
-  }, [ruledTransactions]);
+  }, [ruledTransactions, goalState]);
+
+  // Goal auto-assign: for the current month's budget row of every goal-linked category, default
+  // the assignment to the suggested-monthly amount. Skip fully-funded goals and respect manual
+  // overrides exactly like the spend-based auto-assign above.
+  useEffect(() => {
+    setAssignmentState((previous) => {
+      let changed = false;
+      const next = { ...previous };
+      goalState.forEach((goal) => {
+        if (!goal.categoryId) return;
+        const isComplete = Boolean(goal.completedAt) || goal.currentSavedYen >= goal.targetAmountYen;
+        const key = budgetKey(selectedMonth, goal.categoryId);
+        const current = next[key];
+        if (current?.isManuallySet) return;
+        const suggested = isComplete ? 0 : suggestedMonthlyForGoal(goal, selectedMonth);
+        if (!current || current.assignedYen !== suggested) {
+          next[key] = { assignedYen: suggested, isManuallySet: false };
+          changed = true;
+        }
+      });
+      return changed ? next : previous;
+    });
+  }, [goalState, selectedMonth]);
+
+  // Back-fill: any goal that pre-dates the auto-create-category logic gets a budget category
+  // (in grp-goals) and link so it shows up in the Budget tab's Savings Goals section.
+  useEffect(() => {
+    const orphans = goalState.filter((goal) => !goal.categoryId);
+    if (orphans.length === 0) return;
+    const newCategories: Category[] = [];
+    const linkedGoals = goalState.map((goal) => {
+      if (goal.categoryId) return goal;
+      const categoryId = makeLocalId("cat");
+      newCategories.push({ id: categoryId, groupId: "grp-goals", name: goal.name, source: "system" });
+      return { ...goal, categoryId };
+    });
+    setCategoryState((previous) => [...previous, ...newCategories]);
+    setGoalState(linkedGoals);
+  }, [goalState]);
 
   const setAssumption = (field: keyof ForecastInputs, value: string | number | boolean | undefined) => {
     setAssumptions((previous) => ({ ...previous, [field]: value }));
@@ -275,6 +315,219 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
     setBudgetNotice(previousIncomeEntries.length > 0 ? notice : "First month created with category structure only. Add income and assignments to begin.");
   };
 
+  // ──────────────────────────────────────────────────────────────────────────────
+  // Persistence wrappers — keep React state snappy and fire-and-forget the API.
+  // The API responds with the canonical row; we trust local state for rendering
+  // but log mismatches if the server rejects. Failures don't roll the UI back —
+  // a stale UI plus a console error is preferable to a flicker for a dropped
+  // request, since reload always re-syncs from Postgres.
+  // ──────────────────────────────────────────────────────────────────────────────
+  const persistAssignment = (categoryId: string, value: number, isManuallySet: boolean = true) => {
+    setAssignmentState((previous) => ({ ...previous, [budgetKey(selectedMonth, categoryId)]: { assignedYen: value, isManuallySet } }));
+    fetch(`/api/budget/${selectedMonth}/${encodeURIComponent(categoryId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assignedYen: value, isManuallySet }),
+    }).catch((error) => console.error("Failed to persist budget assignment", error));
+  };
+
+  const persistGoals: Dispatch<SetStateAction<SavingsGoal[]>> = (action) => {
+    setGoalState((previous) => {
+      const next = typeof action === "function" ? (action as (p: SavingsGoal[]) => SavingsGoal[])(previous) : action;
+      const previousById = new Map(previous.map((goal) => [goal.id, goal]));
+      const nextById = new Map(next.map((goal) => [goal.id, goal]));
+      // Detect adds.
+      next.forEach((goal) => {
+        if (!previousById.has(goal.id)) {
+          fetch("/api/goals", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: goal.name,
+              emoji: goal.emoji,
+              targetAmountYen: goal.targetAmountYen,
+              targetDate: goal.targetDate,
+              categoryId: goal.categoryId,
+              fundingAccountId: goal.fundingAccountId,
+              currentSavedYen: goal.currentSavedYen,
+              monthlyAllocationYen: goal.monthlyAllocationYen,
+            }),
+          })
+            .then(async (response) => {
+              if (!response.ok) throw new Error(await response.text());
+              const payload = await response.json() as { goal: SavingsGoal };
+              if (payload.goal.id !== goal.id) {
+                // Server assigned a real id; replace the optimistic one in state.
+                setGoalState((current) => current.map((item) => item.id === goal.id ? payload.goal : item));
+              }
+            })
+            .catch((error) => console.error("Failed to create goal", error));
+        }
+      });
+      // Detect deletes.
+      previous.forEach((goal) => {
+        if (!nextById.has(goal.id)) {
+          fetch(`/api/goals/${encodeURIComponent(goal.id)}?month=${encodeURIComponent(selectedMonth)}`, { method: "DELETE" })
+            .catch((error) => console.error("Failed to delete goal", error));
+        }
+      });
+      // Detect updates.
+      next.forEach((goal) => {
+        const before = previousById.get(goal.id);
+        if (!before) return;
+        if (before.currentSavedYen !== goal.currentSavedYen) {
+          fetch(`/api/goals/${encodeURIComponent(goal.id)}/balance`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ amount: goal.currentSavedYen }),
+          }).catch((error) => console.error("Failed to update goal balance", error));
+        }
+        if (before.name !== goal.name || before.emoji !== goal.emoji || before.targetAmountYen !== goal.targetAmountYen || before.targetDate !== goal.targetDate || before.categoryId !== goal.categoryId || before.fundingAccountId !== goal.fundingAccountId) {
+          fetch(`/api/goals/${encodeURIComponent(goal.id)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: goal.name,
+              emoji: goal.emoji,
+              targetAmountYen: goal.targetAmountYen,
+              targetDate: goal.targetDate,
+              categoryId: goal.categoryId,
+              fundingAccountId: goal.fundingAccountId ?? null,
+            }),
+          }).catch((error) => console.error("Failed to update goal", error));
+        }
+      });
+      return next;
+    });
+  };
+
+  const persistCategories: Dispatch<SetStateAction<Category[]>> = (action) => {
+    setCategoryState((previous) => {
+      const next = typeof action === "function" ? (action as (p: Category[]) => Category[])(previous) : action;
+      const previousById = new Map(previous.map((category) => [category.id, category]));
+      const nextById = new Map(next.map((category) => [category.id, category]));
+      next.forEach((category) => {
+        if (!previousById.has(category.id)) {
+          fetch("/api/categories", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ groupId: category.groupId, name: category.name, source: category.source }),
+          })
+            .then(async (response) => {
+              if (!response.ok) throw new Error(await response.text());
+              const payload = await response.json() as { category: Category };
+              if (payload.category.id !== category.id) {
+                setCategoryState((current) => current.map((item) => item.id === category.id ? payload.category : item));
+              }
+            })
+            .catch((error) => console.error("Failed to create category", error));
+        }
+      });
+      previous.forEach((category) => {
+        const after = nextById.get(category.id);
+        if (!after) {
+          fetch(`/api/categories/${encodeURIComponent(category.id)}`, { method: "DELETE" })
+            .catch((error) => console.error("Failed to delete category", error));
+          return;
+        }
+        if (after.isArchived && !category.isArchived) {
+          fetch(`/api/categories/${encodeURIComponent(category.id)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ isArchived: true }),
+          }).catch((error) => console.error("Failed to archive category", error));
+        }
+      });
+      return next;
+    });
+  };
+
+  const persistIncomeEntries: Dispatch<SetStateAction<IncomeEntry[]>> = (action) => {
+    setIncomeEntryState((previous) => {
+      const next = typeof action === "function" ? (action as (p: IncomeEntry[]) => IncomeEntry[])(previous) : action;
+      const previousById = new Map(previous.map((entry) => [entry.id, entry]));
+      const nextById = new Map(next.map((entry) => [entry.id, entry]));
+      next.forEach((entry) => {
+        const before = previousById.get(entry.id);
+        if (!before) {
+          fetch(`/api/income/${entry.month}/entries`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sourceName: entry.sourceName, amountYen: entry.amountYen }),
+          })
+            .then(async (response) => {
+              if (!response.ok) throw new Error(await response.text());
+              const payload = await response.json() as { entry: IncomeEntry };
+              if (payload.entry.id !== entry.id) {
+                setIncomeEntryState((current) => current.map((item) => item.id === entry.id ? payload.entry : item));
+              }
+            })
+            .catch((error) => console.error("Failed to create income entry", error));
+          return;
+        }
+        if (before.sourceName !== entry.sourceName || before.amountYen !== entry.amountYen) {
+          fetch(`/api/income/${entry.month}/entries/${encodeURIComponent(entry.id)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sourceName: entry.sourceName, amountYen: entry.amountYen }),
+          }).catch((error) => console.error("Failed to update income entry", error));
+        }
+      });
+      previous.forEach((entry) => {
+        if (!nextById.has(entry.id)) {
+          fetch(`/api/income/${entry.month}/entries?id=${encodeURIComponent(entry.id)}`, { method: "DELETE" })
+            .catch((error) => console.error("Failed to delete income entry", error));
+        }
+      });
+      return next;
+    });
+  };
+
+  const persistAccounts: Dispatch<SetStateAction<Account[]>> = (action) => {
+    setAccountState((previous) => {
+      const next = typeof action === "function" ? (action as (p: Account[]) => Account[])(previous) : action;
+      const previousById = new Map(previous.map((account) => [account.id, account]));
+      const nextById = new Map(next.map((account) => [account.id, account]));
+      next.forEach((account) => {
+        const before = previousById.get(account.id);
+        if (!before) {
+          fetch("/api/accounts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: account.name, type: account.type, balanceYen: account.balanceYen, creditLimit: account.creditLimit }),
+          })
+            .then(async (response) => {
+              if (!response.ok) throw new Error(await response.text());
+              const payload = await response.json() as { account: Account };
+              if (payload.account.id !== account.id) {
+                setAccountState((current) => current.map((item) => item.id === account.id ? payload.account : item));
+              }
+            })
+            .catch((error) => console.error("Failed to create account", error));
+          return;
+        }
+        if (before.name !== account.name || before.balanceYen !== account.balanceYen || before.creditLimit !== account.creditLimit || before.isArchived !== account.isArchived) {
+          fetch(`/api/accounts/${encodeURIComponent(account.id)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: account.name, balanceYen: account.balanceYen, creditLimit: account.creditLimit, isArchived: account.isArchived }),
+          }).catch((error) => console.error("Failed to update account", error));
+        }
+      });
+      previous.forEach((account) => {
+        if (!nextById.has(account.id)) {
+          // No DELETE endpoint yet — archiving via PUT covers the soft-delete path.
+          fetch(`/api/accounts/${encodeURIComponent(account.id)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ isArchived: true }),
+          }).catch((error) => console.error("Failed to archive account", error));
+        }
+      });
+      return next;
+    });
+  };
+
   const page = pageTitles[activePage];
 
   return (
@@ -282,7 +535,7 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
     <div className="min-h-screen bg-[#F5F4F0] text-slate-900">
       <WelcomeToast />
       <div className="flex">
-        <Sidebar user={user} accounts={accountState} investments={investmentState} debts={debtState} netWorthYen={netWorth.netWorthYen} activePage={activePage} onNavigate={(pageKey) => setActivePage(pageKey as PageKey)} onAddAccount={(account) => setAccountState((previous) => [...previous, account])} onEditAccount={(id, changes) => setAccountState((previous) => previous.map((account) => account.id === id ? { ...account, ...changes } : account))} onSelectAccount={(accountId) => { setTransactionAccountFilterIds([accountId]); setActivePage("transactions"); }} />
+        <Sidebar user={user} accounts={accountState} investments={investmentState} debts={debtState} goals={goalState} netWorthYen={netWorth.netWorthYen} activePage={activePage} onNavigate={(pageKey) => setActivePage(pageKey as PageKey)} onAddAccount={(account) => persistAccounts((previous) => [...previous, account])} onEditAccount={(id, changes) => persistAccounts((previous) => previous.map((account) => account.id === id ? { ...account, ...changes } : account))} onSelectAccount={(accountId) => { setTransactionAccountFilterIds([accountId]); setActivePage("transactions"); }} />
         <main className="min-w-0 flex-1 px-8 py-8">
           <header className="mb-6 flex items-start justify-between gap-4">
             <div>
@@ -297,16 +550,16 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
 
           {activePage === "home" && <HomePage readyToAssignYen={readyToAssignYen} netWorthYen={netWorth.netWorthYen} savingsRate={savingsRate} fatfireAge={deterministic.estimatedFatfireAge} healthScore={health.score} uncategorizedCount={uncategorizedCount} overspentCount={overspentCount} contributionDeltaYen={deterministic.contributionDeltaYen} accounts={accountState} onNavigate={setActivePage} />}
 
-          {activePage === "budget" && <BudgetPage month={selectedMonth} setMonth={openBudgetMonth} incomeEntries={currentIncomeEntries} setIncomeEntries={setIncomeEntryState} readyToAssignYen={readyToAssignYen} budgetRows={visibleBudgetRows} fullBudgetRows={budgetRows} budgetFilter={budgetFilter} setBudgetFilter={setBudgetFilter} categoryGroups={categoryGroupState} categoryList={activeCategories} setCategories={setCategoryState} transactions={ruledTransactions} setTransactions={setTransactionState} budgetNotice={budgetNotice} estimatedAssignments={estimatedAssignments} setAssignment={(categoryId, value, isManuallySet = true) => setAssignmentState((previous) => ({ ...previous, [budgetKey(selectedMonth, categoryId)]: { assignedYen: value, isManuallySet } }))} assignments={assignments} />}
+          {activePage === "budget" && <BudgetPage month={selectedMonth} setMonth={openBudgetMonth} incomeEntries={currentIncomeEntries} setIncomeEntries={persistIncomeEntries} readyToAssignYen={readyToAssignYen} budgetRows={visibleBudgetRows} fullBudgetRows={budgetRows} budgetFilter={budgetFilter} setBudgetFilter={setBudgetFilter} categoryGroups={categoryGroupState} categoryList={activeCategories} setCategories={persistCategories} transactions={ruledTransactions} setTransactions={setTransactionState} budgetNotice={budgetNotice} estimatedAssignments={estimatedAssignments} setAssignment={persistAssignment} assignments={assignments} goals={goalState} setGoals={persistGoals} />}
 
           {activePage === "transactions" && <TransactionsPage key={`${transactionAccountFilterIds.join(",")}:${transactionCategoryFilterIds.join(",")}`} month={selectedMonth} setMonth={setSelectedMonth} transactions={ruledTransactions} rawTransactions={transactionState} setTransactions={setTransactionState} incomeEntries={incomeEntryState} accounts={accountState} categories={activeCategories} merchantRules={merchantRuleState} setMerchantRules={setMerchantRuleState} initialAccountIds={transactionAccountFilterIds} initialCategoryIds={transactionCategoryFilterIds} />}
-          {activePage === "debt" && <DebtPage month={selectedMonth} debts={debtState} setDebts={setDebtState} totalMonthlyObligationYen={debtSummary.totalMonthlyObligationYen} totalOutstandingYen={debtSummary.totalOutstandingYen} categoryGroups={categoryGroupState} categories={activeCategories} setCategories={setCategoryState} transactions={transactionState} setTransactions={setTransactionState} />}
-          {activePage === "goals" && <GoalsPage month={selectedMonth} goals={goalState} setGoals={setGoalState} assignments={assignments} setCategories={setCategoryState} transactions={transactionState} setTransactions={setTransactionState} />}
+          {activePage === "debt" && <DebtPage month={selectedMonth} debts={debtState} setDebts={setDebtState} totalMonthlyObligationYen={debtSummary.totalMonthlyObligationYen} totalOutstandingYen={debtSummary.totalOutstandingYen} categoryGroups={categoryGroupState} categories={activeCategories} setCategories={persistCategories} transactions={transactionState} setTransactions={setTransactionState} />}
+          {activePage === "goals" && <GoalsPage month={selectedMonth} goals={goalState} setGoals={persistGoals} assignments={assignments} setCategories={persistCategories} transactions={transactionState} setTransactions={setTransactionState} setAssignment={persistAssignment} accounts={accountState} />}
           {activePage === "investments" && <InvestmentsPage investments={investmentState} setInvestments={setInvestmentState} />}
           {activePage === "forecast" && <ForecastPage inputs={effectiveForecastInputs} assumptions={assumptions} setAssumption={setAssumption} />}
           {activePage === "reports" && <ReportsPage selectedMonth={selectedMonth} transactions={transactionState} incomeEntries={incomeEntryState} categories={activeCategories} accounts={accountState} investments={investmentState} debts={debtState} onCategoryClick={(categoryId) => { setTransactionCategoryFilterIds([categoryId]); setActivePage("transactions"); }} />}
           {activePage === "import" && <ImportPage setAccounts={setAccountState} setCategories={setCategoryState} setIncomeEntries={setIncomeEntryState} setTransactions={setTransactionState} />}
-          {activePage === "settings" && <SettingsPage assumptions={assumptions} setAssumption={setAssumption} accounts={accountState} setAccounts={setAccountState} investments={investmentState} setInvestments={setInvestmentState} debts={debtState} setDebts={setDebtState} goals={goalState} setGoals={setGoalState} categories={activeCategories} merchantRules={merchantRuleState} setMerchantRules={setMerchantRuleState} />}
+          {activePage === "settings" && <SettingsPage assumptions={assumptions} setAssumption={setAssumption} accounts={accountState} setAccounts={persistAccounts} investments={investmentState} setInvestments={setInvestmentState} debts={debtState} setDebts={setDebtState} goals={goalState} setGoals={persistGoals} categories={activeCategories} merchantRules={merchantRuleState} setMerchantRules={setMerchantRuleState} />}
         </main>
       </div>
     </div>
@@ -373,7 +626,22 @@ function HomePage({ readyToAssignYen, netWorthYen, savingsRate, fatfireAge, heal
   );
 }
 
-function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToAssignYen, budgetRows, fullBudgetRows, budgetFilter, setBudgetFilter, categoryGroups, categoryList, setCategories, transactions, setTransactions, budgetNotice, estimatedAssignments, setAssignment, assignments }: { month: string; setMonth: (month: string) => void; incomeEntries: IncomeEntry[]; setIncomeEntries: Dispatch<SetStateAction<IncomeEntry[]>>; readyToAssignYen: number; budgetRows: ReturnType<typeof buildBudgetRows>; fullBudgetRows: ReturnType<typeof buildBudgetRows>; budgetFilter: "all" | "overspent" | "underfunded" | "funded"; setBudgetFilter: (filter: "all" | "overspent" | "underfunded" | "funded") => void; categoryGroups: CategoryGroup[]; categoryList: Category[]; setCategories: Dispatch<SetStateAction<Category[]>>; transactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>>; budgetNotice: string | null; estimatedAssignments: Record<string, boolean>; setAssignment: (categoryId: string, value: number, isManuallySet?: boolean) => void; assignments: BudgetAssignment[] }) {
+function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToAssignYen, budgetRows, fullBudgetRows, budgetFilter, setBudgetFilter, categoryGroups, categoryList, setCategories, transactions, setTransactions, budgetNotice, estimatedAssignments, setAssignment, assignments, goals, setGoals }: { month: string; setMonth: (month: string) => void; incomeEntries: IncomeEntry[]; setIncomeEntries: Dispatch<SetStateAction<IncomeEntry[]>>; readyToAssignYen: number; budgetRows: ReturnType<typeof buildBudgetRows>; fullBudgetRows: ReturnType<typeof buildBudgetRows>; budgetFilter: "all" | "overspent" | "underfunded" | "funded"; setBudgetFilter: (filter: "all" | "overspent" | "underfunded" | "funded") => void; categoryGroups: CategoryGroup[]; categoryList: Category[]; setCategories: Dispatch<SetStateAction<Category[]>>; transactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>>; budgetNotice: string | null; estimatedAssignments: Record<string, boolean>; setAssignment: (categoryId: string, value: number, isManuallySet?: boolean) => void; assignments: BudgetAssignment[]; goals: SavingsGoal[]; setGoals: Dispatch<SetStateAction<SavingsGoal[]>> }) {
+  const fundGoalFromBudget = (categoryId: string, allocation: number) => {
+    const goal = goals.find((g) => g.categoryId === categoryId);
+    if (!goal || allocation <= 0) return;
+    const remaining = Math.max(0, goal.targetAmountYen - goal.currentSavedYen);
+    const transfer = Math.min(allocation, remaining);
+    if (transfer === 0) return;
+    setGoals((previous) => previous.map((item) => item.id === goal.id ? {
+      ...item,
+      currentSavedYen: item.currentSavedYen + transfer,
+      completedAt: item.currentSavedYen + transfer >= item.targetAmountYen ? new Date().toISOString() : item.completedAt,
+    } : item));
+    // Reduce the assignment by what was actually transferred — leftover (e.g. user assigned more
+    // than the goal still needed) stays available for the next month.
+    setAssignment(categoryId, allocation - transfer, true);
+  };
   const filters = ["all", "overspent", "underfunded", "funded"] as const;
   const [incomeCollapsed, setIncomeCollapsed] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
@@ -449,10 +717,8 @@ function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToA
 
   // Negative ready-to-assign is a planning warning, not an error: use amber, not red (Fix 5d).
   const readyTone: "green" | "amber" = readyToAssignYen > 0 ? "green" : "amber";
-  const readyBg = readyTone === "green" ? "bg-[#E8F5EE]" : "bg-[#FBEFD9]";
-  const readyText = readyTone === "green" ? "text-[#2F7A58]" : "text-[#8A5A10]";
   const readyHeadline = readyToAssignYen > 0
-    ? `${formatJPY(readyToAssignYen)} available to assign`
+    ? formatJPY(readyToAssignYen)
     : readyToAssignYen === 0
       ? "All income assigned"
       : `Over-assigned by ${formatJPY(Math.abs(readyToAssignYen))}`;
@@ -466,16 +732,6 @@ function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToA
     <div className="space-y-4">
       <MonthNavigator month={month} onPrevious={() => setMonth(shiftMonth(month, -1))} onNext={() => setMonth(shiftMonth(month, 1))} />
 
-      <div className={`rounded-2xl ${readyBg} px-5 py-4`}>
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <p className={`text-[11px] font-medium uppercase tracking-[0.08em] ${readyText}`}>Ready to assign</p>
-            <p className={`mt-1 text-3xl font-medium tabular-nums ${readyText}`}>{readyHeadline}</p>
-          </div>
-          <p className={`max-w-xs text-right text-xs leading-relaxed ${readyText}/80`}>{readyDetail}</p>
-        </div>
-      </div>
-
       {budgetNotice && <NoticeBanner tone="amber">{budgetNotice}</NoticeBanner>}
       {overspentByYen > 0 && <NoticeBanner tone="red">You spent {formatJPY(overspentByYen)} more than you earned this month.</NoticeBanner>}
       {nisaWarning && <NoticeBanner tone="amber">{nisaWarning}</NoticeBanner>}
@@ -483,7 +739,7 @@ function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToA
       <section className="grid gap-4 xl:grid-cols-3">
         <MetricCard label="Total income this month" value={formatJPY(totalIncomeYen)} detail="Entered in monthly income rows" tone="blue" />
         <MetricCard label="Total assigned" value={formatJPY(totalIncomeYen - readyToAssignYen)} detail="Across all categories" />
-        <MetricCard label="Overspent categories" value={`${fullBudgetRows.filter((row) => row.status === "overspent").length}`} detail="Categories below zero available" tone={fullBudgetRows.filter((row) => row.status === "overspent").length > 0 ? "red" : "neutral"} />
+        <MetricCard label="Ready to assign" value={readyHeadline} detail={readyDetail} tone={readyTone === "green" ? "green" : "amber"} />
       </section>
 
       <Card title="Income" eyebrow="Monthly sources" action={
@@ -549,7 +805,7 @@ function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToA
                 </td>
               </tr>
             </thead>
-            <tbody>{categoryGroups.map((group) => { const rows = sortBudgetRowsByActivity(budgetRows.filter((row) => row.category.groupId === group.id)); if (rows.length === 0 && categoryList.every((category) => category.groupId !== group.id)) return null; return <BudgetGroup key={group.id} groupId={group.id} name={group.name} rows={rows} isCollapsed={collapsedGroups[group.id] ?? false} toggleCollapsed={() => persistCollapsedGroups({ ...collapsedGroups, [group.id]: !(collapsedGroups[group.id] ?? false) })} addCategory={() => addCategory(group.id)} deleteCategory={deleteCategory} setAssignment={assignWithNisaCheck} month={month} transactions={transactions} openActivityCategoryId={activityCategoryId} setOpenActivityCategoryId={setActivityCategoryId} expenseDraft={expenseDraft} setExpenseDraft={setExpenseDraft} logExpense={logExpense} expenseError={expenseError} estimatedAssignments={estimatedAssignments} />; })}</tbody>
+            <tbody>{categoryGroups.map((group) => { const rows = sortBudgetRowsByActivity(budgetRows.filter((row) => row.category.groupId === group.id)); const isAlwaysOnGroup = group.id === "grp-goals"; if (rows.length === 0 && categoryList.every((category) => category.groupId !== group.id) && !isAlwaysOnGroup) return null; return <BudgetGroup key={group.id} groupId={group.id} name={group.name} rows={rows} isCollapsed={collapsedGroups[group.id] ?? false} toggleCollapsed={() => persistCollapsedGroups({ ...collapsedGroups, [group.id]: !(collapsedGroups[group.id] ?? false) })} addCategory={() => addCategory(group.id)} deleteCategory={deleteCategory} setAssignment={assignWithNisaCheck} month={month} transactions={transactions} openActivityCategoryId={activityCategoryId} setOpenActivityCategoryId={setActivityCategoryId} expenseDraft={expenseDraft} setExpenseDraft={setExpenseDraft} logExpense={logExpense} expenseError={expenseError} estimatedAssignments={estimatedAssignments} goals={goals} fundGoal={fundGoalFromBudget} />; })}</tbody>
           </table>
         </div>
       </Card>
@@ -848,17 +1104,19 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
                         <td className={`py-2 pr-0 text-right text-sm tabular-nums ${transaction.type === "credit" ? "text-[#2F7A58]" : "text-[#E5534B]"}`}>
                           <div className="flex items-center justify-end gap-2">
                             <span>{transaction.type === "credit" ? "+" : "−"}{formatJPY(transaction.amountYen)}</span>
-                            {originalTransaction && (
-                              <button
-                                type="button"
-                                onClick={() => setPendingDeleteTransaction(originalTransaction)}
-                                aria-label={`Delete ${transaction.payee}`}
-                                title="Delete transaction"
-                                className="rounded p-0.5 text-[#6B7280] opacity-0 transition group-hover:opacity-100 hover:bg-[#FBE5E3] hover:text-[#E5534B]"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            )}
+                            <span className="inline-flex h-5 w-5 items-center justify-center">
+                              {originalTransaction && (
+                                <button
+                                  type="button"
+                                  onClick={() => setPendingDeleteTransaction(originalTransaction)}
+                                  aria-label={`Delete ${transaction.payee}`}
+                                  title="Delete transaction"
+                                  className="rounded p-0.5 text-[#6B7280] opacity-0 transition group-hover:opacity-100 hover:bg-[#FBE5E3] hover:text-[#E5534B]"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              )}
+                            </span>
                           </div>
                         </td>
                       </tr>
@@ -1362,12 +1620,16 @@ function EmptyIllustration({ icon, title, detail, cta }: { icon: ReactNode; titl
   );
 }
 
-function GoalsPage({ month, goals, setGoals, assignments, setCategories, transactions, setTransactions }: { month: string; goals: SavingsGoal[]; setGoals: (goals: SavingsGoal[]) => void; assignments: BudgetAssignment[]; setCategories: Dispatch<SetStateAction<Category[]>>; transactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>> }) {
+function GoalsPage({ month, goals, setGoals, assignments, setCategories, transactions, setTransactions, setAssignment, accounts }: { month: string; goals: SavingsGoal[]; setGoals: (goals: SavingsGoal[]) => void; assignments: BudgetAssignment[]; setCategories: Dispatch<SetStateAction<Category[]>>; transactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>>; setAssignment: (categoryId: string, value: number, isManuallySet?: boolean) => void; accounts: Account[] }) {
   const [isCreating, setIsCreating] = useState(false);
   const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
   const [balanceGoalId, setBalanceGoalId] = useState<string | null>(null);
   const [deleteGoalId, setDeleteGoalId] = useState<string | null>(null);
-  const [draftGoal, setDraftGoal] = useState({ name: "", emoji: "🎯", targetAmountYen: 0, targetDate: `${month}-28`, notes: "" });
+  const [fundingGoalId, setFundingGoalId] = useState<string | null>(null);
+  const [fundingAmount, setFundingAmount] = useState<number>(0);
+  const savingsAccounts = accounts.filter((a) => !a.isArchived && (a.type === "checking" || a.type === "savings"));
+  const defaultFundingAccountId = savingsAccounts[0]?.id ?? "";
+  const [draftGoal, setDraftGoal] = useState({ name: "", emoji: "🎯", targetAmountYen: 0, targetDate: `${month}-28`, notes: "", fundingAccountId: defaultFundingAccountId });
   const updateGoal = (id: string, changes: Partial<SavingsGoal>) => setGoals(goals.map((goal) => goal.id === id ? { ...goal, ...changes } : goal));
   const editingGoal = goals.find((goal) => goal.id === editingGoalId) ?? null;
   const deleteGoal = goals.find((goal) => goal.id === deleteGoalId) ?? null;
@@ -1402,9 +1664,55 @@ function GoalsPage({ month, goals, setGoals, assignments, setCategories, transac
   const addGoal = () => {
     if (!draftGoal.name.trim()) return;
     const id = makeLocalId("goal");
-    setGoals([...goals, { id, emoji: draftGoal.emoji, name: draftGoal.name.trim(), currentSavedYen: 0, targetAmountYen: draftGoal.targetAmountYen, monthlyAllocationYen: 0, targetDate: draftGoal.targetDate, notes: draftGoal.notes }]);
-    setDraftGoal({ name: "", emoji: "🎯", targetAmountYen: 0, targetDate: `${month}-28`, notes: "" });
+    const categoryId = makeLocalId("cat");
+    const seedGoal: SavingsGoal = { id, categoryId, fundingAccountId: draftGoal.fundingAccountId || undefined, emoji: draftGoal.emoji, name: draftGoal.name.trim(), currentSavedYen: 0, targetAmountYen: draftGoal.targetAmountYen, monthlyAllocationYen: 0, targetDate: draftGoal.targetDate, notes: draftGoal.notes };
+    const suggested = suggestedMonthlyForGoal(seedGoal, month);
+    setCategories((previous) => [...previous, { id: categoryId, groupId: "grp-goals", name: draftGoal.name.trim(), source: "system" }]);
+    setGoals([...goals, { ...seedGoal, monthlyAllocationYen: suggested }]);
+    setAssignment(categoryId, suggested, false);
+    setDraftGoal({ name: "", emoji: "🎯", targetAmountYen: 0, targetDate: `${month}-28`, notes: "", fundingAccountId: defaultFundingAccountId });
     setIsCreating(false);
+  };
+
+  const fundingGoal = goals.find((g) => g.id === fundingGoalId) ?? null;
+  const openFundModal = (goal: SavingsGoal) => {
+    setFundingGoalId(goal.id);
+    // Pre-fill with whatever's currently assigned in the budget for this goal.
+    setFundingAmount(getMonthlyAllocation(goal));
+  };
+  const closeFundModal = () => {
+    setFundingGoalId(null);
+    setFundingAmount(0);
+  };
+  const submitFund = () => {
+    if (!fundingGoal || !fundingGoal.categoryId || fundingAmount <= 0) return;
+    const remaining = Math.max(0, fundingGoal.targetAmountYen - fundingGoal.currentSavedYen);
+    const transfer = Math.min(fundingAmount, remaining);
+    if (transfer === 0) return;
+    setGoals(goals.map((item) => item.id === fundingGoal.id ? {
+      ...item,
+      currentSavedYen: item.currentSavedYen + transfer,
+      completedAt: item.currentSavedYen + transfer >= item.targetAmountYen ? new Date().toISOString() : item.completedAt,
+    } : item));
+    // Reduce assignment by what was actually transferred (clamped to 0). Anything above the
+    // budgeted assignment was an extra contribution from the funding account directly.
+    const currentAssignment = getMonthlyAllocation(fundingGoal);
+    const remainingAssignment = Math.max(0, currentAssignment - transfer);
+    setAssignment(fundingGoal.categoryId, remainingAssignment, true);
+    closeFundModal();
+  };
+
+  const fundGoal = (goal: SavingsGoal) => {
+    if (!goal.categoryId) return;
+    const allocation = getMonthlyAllocation(goal);
+    if (allocation <= 0) return;
+    // Never push the goal past its target; clamp to the remaining shortfall.
+    const remaining = Math.max(0, goal.targetAmountYen - goal.currentSavedYen);
+    const transfer = Math.min(allocation, remaining);
+    if (transfer === 0) return;
+    setGoals(goals.map((item) => item.id === goal.id ? { ...item, currentSavedYen: item.currentSavedYen + transfer, completedAt: item.currentSavedYen + transfer >= item.targetAmountYen ? new Date().toISOString() : item.completedAt } : item));
+    // Reduce the assignment by what we actually transferred — leftover stays for next time.
+    setAssignment(goal.categoryId, allocation - transfer, true);
   };
 
   return (
@@ -1436,9 +1744,12 @@ function GoalsPage({ month, goals, setGoals, assignments, setCategories, transac
               const allocation = getMonthlyAllocation(goal);
               const progress = goal.targetAmountYen > 0 ? (goal.currentSavedYen / goal.targetAmountYen) * 100 : 0;
               const complete = isGoalComplete(goal);
-              const onTrack = allocation > 0 && new Date(projectedDate(goal, allocation)) <= new Date(goal.targetDate);
+              const suggested = suggestedMonthlyForGoal(goal, month);
+              const onTrack = complete || (allocation >= suggested && suggested > 0);
               const statusTone: "green" | "amber" | "blue" = complete ? "green" : onTrack ? "blue" : "amber";
               const statusLabel = complete ? "Complete" : onTrack ? "On track" : "Behind";
+              const remainingToTarget = Math.max(0, goal.targetAmountYen - goal.currentSavedYen);
+              const fundTransfer = Math.min(allocation, remainingToTarget);
               return (
                 <div key={goal.id} className={`relative overflow-hidden rounded-2xl p-5 shadow-[0_1px_2px_rgba(17,24,39,0.04)] ${complete ? "bg-[#E8F5EE]" : "bg-white"}`}>
                   <div className="flex items-start justify-between gap-3">
@@ -1459,10 +1770,27 @@ function GoalsPage({ month, goals, setGoals, assignments, setCategories, transac
                   </div>
                   <div className="mt-4 grid gap-1 border-t border-[#F0EFEB] pt-3 text-xs leading-relaxed text-[#6B7280]">
                     <div className="flex justify-between"><span>Target date</span><span className="tabular-nums text-slate-700">{goal.targetDate}</span></div>
-                    <div className="flex justify-between"><span>Monthly from budget</span><span className="tabular-nums text-slate-900">{formatJPY(allocation)}</span></div>
-                    <div className="flex justify-between"><span>Projected</span><span className="text-slate-700">{projectedDate(goal, allocation)}</span></div>
+                    <div className="flex justify-between"><span>Suggested per month</span><span className="tabular-nums text-slate-900">{complete ? "—" : formatJPY(suggested)}</span></div>
+                    <div className="flex justify-between">
+                      <span>Assigned this month</span>
+                      <span className="tabular-nums text-slate-900">
+                        {formatJPY(allocation)}
+                        {!complete && allocation !== suggested && suggested > 0 && (
+                          <span className={`ml-1.5 text-[10px] ${allocation > suggested ? "text-[#2F7A58]" : "text-[#8A5A10]"}`}>
+                            ({allocation > suggested ? "+" : "−"}{formatJPY(Math.abs(allocation - suggested))})
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                    <div className="flex justify-between"><span>Projected</span><span className="text-slate-700">{complete ? "Complete" : projectedDate(goal, allocation)}</span></div>
+                    <div className="flex justify-between"><span>Funded from</span><span className="truncate text-slate-700">{(() => { const account = accounts.find((a) => a.id === goal.fundingAccountId); return account ? getAccountDisplayNames(account.name).primary : "Unlinked"; })()}</span></div>
                   </div>
                   <div className="mt-4 flex items-center gap-2">
+                    {!complete && (
+                      <button type="button" onClick={() => openFundModal(goal)} disabled={!goal.fundingAccountId} className="rounded-md bg-[#4A7CFF] px-2.5 py-1.5 text-xs font-medium text-white hover:bg-[#3F6DE8] disabled:cursor-not-allowed disabled:opacity-50" title={goal.fundingAccountId ? "Move money from your savings account into this goal" : "Set a funding account to enable transfers"}>
+                        Fund…
+                      </button>
+                    )}
                     <div className="relative">
                       <button type="button" onClick={() => setBalanceGoalId(balanceGoalId === goal.id ? null : goal.id)} className="rounded-md bg-[#FAFAF8] px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-[#EEEDE9]">Update balance</button>
                       {balanceGoalId === goal.id && (
@@ -1494,6 +1822,12 @@ function GoalsPage({ month, goals, setGoals, assignments, setCategories, transac
                   <TextInput label="Emoji" value={editingGoal.emoji} onChange={(value) => updateGoal(editingGoal.id, { emoji: value })} />
                   <CurrencyInput label="Target amount" value={editingGoal.targetAmountYen} onChange={(value) => updateGoal(editingGoal.id, { targetAmountYen: value })} />
                   <TextInput label="Target date" type="date" value={editingGoal.targetDate} onChange={(value) => updateGoal(editingGoal.id, { targetDate: value })} />
+                  <SelectField label="Funding account" value={editingGoal.fundingAccountId ?? ""} onChange={(value) => updateGoal(editingGoal.id, { fundingAccountId: value || undefined })}>
+                    <option value="">Unlinked</option>
+                    {savingsAccounts.map((account) => (
+                      <option key={account.id} value={account.id}>{getAccountDisplayNames(account.name).primary} · {formatJPY(account.balanceYen)}</option>
+                    ))}
+                  </SelectField>
                   <TextInput label="Notes" value={editingGoal.notes ?? ""} onChange={(value) => updateGoal(editingGoal.id, { notes: value })} />
                   <p className="rounded-md bg-[#E6EDFF] px-3 py-2 text-xs text-[#2450B5]">Monthly allocation is set exclusively in the Budget tab.</p>
                   <button type="button" onClick={() => requestDeleteGoal(editingGoal)} className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#FBE5E3] px-4 py-2.5 text-sm font-medium text-[#A32D27] hover:bg-[#F5CBC7]"><Trash2 className="h-3.5 w-3.5" /> Delete goal</button>
@@ -1522,11 +1856,52 @@ function GoalsPage({ month, goals, setGoals, assignments, setCategories, transac
             <TextInput label="Emoji" value={draftGoal.emoji} onChange={(value) => setDraftGoal({ ...draftGoal, emoji: value })} />
             <CurrencyInput label="Target amount" value={draftGoal.targetAmountYen} onChange={(value) => setDraftGoal({ ...draftGoal, targetAmountYen: value })} />
             <TextInput label="Target date" type="date" value={draftGoal.targetDate} onChange={(value) => setDraftGoal({ ...draftGoal, targetDate: value })} />
+            <SelectField label="Funding account" value={draftGoal.fundingAccountId} onChange={(value) => setDraftGoal({ ...draftGoal, fundingAccountId: value })}>
+              <option value="">Unlinked</option>
+              {savingsAccounts.map((account) => (
+                <option key={account.id} value={account.id}>{getAccountDisplayNames(account.name).primary} · {formatJPY(account.balanceYen)}</option>
+              ))}
+            </SelectField>
             <TextInput label="Notes" value={draftGoal.notes} onChange={(value) => setDraftGoal({ ...draftGoal, notes: value })} />
             <button type="button" onClick={addGoal} className="w-full rounded-lg bg-[#4A7CFF] px-4 py-2.5 text-sm font-medium text-white hover:bg-[#3F6DE8]">Create goal</button>
           </div>
         </Modal>
       )}
+      {fundingGoal && (() => {
+        const fundingAccount = accounts.find((a) => a.id === fundingGoal.fundingAccountId);
+        const remainingNeeded = Math.max(0, fundingGoal.targetAmountYen - fundingGoal.currentSavedYen);
+        const usableInAccount = fundingAccount ? fundingAccount.balanceYen - goals.filter((g) => g.id !== fundingGoal.id && g.fundingAccountId === fundingAccount.id).reduce((sum, g) => sum + g.currentSavedYen, 0) : 0;
+        const accountAfter = fundingAccount ? usableInAccount - fundingAmount : 0;
+        return (
+          <Modal onClose={closeFundModal} title={`Fund ${fundingGoal.name}`} width="440px">
+            <div className="space-y-3">
+              {!fundingAccount && (
+                <p className="rounded-md bg-[#FBE5E3] px-3 py-2 text-xs text-[#A32D27]">No funding account is set on this goal. Edit the goal to pick one.</p>
+              )}
+              {fundingAccount && (
+                <div className="space-y-1 rounded-md bg-[#FAFAF8] px-3 py-2 text-xs text-[#6B7280]">
+                  <div className="flex justify-between"><span>From</span><span className="text-slate-900">{getAccountDisplayNames(fundingAccount.name).primary}</span></div>
+                  <div className="flex justify-between"><span>Usable in this account</span><span className="tabular-nums text-slate-900">{formatJPY(usableInAccount)}</span></div>
+                  <div className="flex justify-between"><span>Goal needs</span><span className="tabular-nums text-slate-900">{formatJPY(remainingNeeded)}</span></div>
+                </div>
+              )}
+              <CurrencyInput label="Transfer amount" value={fundingAmount} onChange={(value) => setFundingAmount(value)} />
+              <p className="text-[11px] text-[#6B7280]">
+                Money stays in {fundingAccount ? getAccountDisplayNames(fundingAccount.name).primary : "the account"}; the goal's progress tracks how much of that balance is set aside.
+                {fundingAccount && fundingAmount > 0 && (
+                  <span> Usable balance after: <span className={`tabular-nums ${accountAfter < 0 ? "text-[#E5534B]" : "text-slate-900"}`}>{formatJPY(accountAfter)}</span>.</span>
+                )}
+              </p>
+              <div className="flex gap-3 pt-2">
+                <button type="button" onClick={closeFundModal} className="flex-1 rounded-lg bg-[#F5F4F0] px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-[#EEEDE9]">Cancel</button>
+                <button type="button" onClick={submitFund} disabled={!fundingAccount || fundingAmount <= 0} className="flex-1 rounded-lg bg-[#4A7CFF] px-4 py-2.5 text-sm font-medium text-white hover:bg-[#3F6DE8] disabled:cursor-not-allowed disabled:opacity-50">
+                  Fund {formatJPY(Math.min(fundingAmount, remainingNeeded))}
+                </button>
+              </div>
+            </div>
+          </Modal>
+        );
+      })()}
     </div>
   );
 }
@@ -1645,22 +2020,70 @@ function ReportsPage({ selectedMonth, transactions, incomeEntries, categories, a
     return { month, income, spending, net: income - spending };
   });
   const categoryData = months.map((month) => {
+    const items = categories
+      .map((category) => ({
+        categoryId: category.id,
+        name: category.name,
+        amount: transactions
+          .filter((transaction) => transaction.type === "debit" && transaction.categoryId === category.id && transaction.date.startsWith(month))
+          .reduce((total, transaction) => total + transaction.amountYen, 0),
+      }))
+      .filter((item) => item.amount >= CHART_MIN_VALUE)
+      .sort((a, b) => b.amount - a.amount);
     const row: Record<string, string | number> = { month };
-    categories.forEach((category) => {
-      row[category.id] = transactions.filter((transaction) => transaction.type === "debit" && transaction.categoryId === category.id && transaction.date.startsWith(month)).reduce((total, transaction) => total + transaction.amountYen, 0);
+    items.forEach((item, index) => {
+      row[`s${index}`] = item.amount;
+      row[`s${index}_cat`] = item.categoryId;
+      row[`s${index}_color`] = getCategoryColor(item.name);
     });
-    return row;
+    return { row, items };
   });
-  const currentMonthSpendingRaw = categories.map((category) => {
-    const amount = Number(categoryData.at(-1)?.[category.id] ?? 0);
-    return { category, amount, value: amount, color: getCategoryColor(category.name) };
-  });
-  const currentMonthSpending = filterLegendItems(sortChartDataDescending(currentMonthSpendingRaw));
+  const categoryDataRows = categoryData.map((entry) => entry.row);
+  const maxCategorySlots = categoryData.reduce((max, entry) => Math.max(max, entry.items.length), 0);
+  const lastMonthCategories = categoryData.at(-1)?.items ?? [];
+  const currentMonthSpending = lastMonthCategories
+    .map((item) => {
+      const category = categories.find((c) => c.id === item.categoryId);
+      return category ? {
+        category,
+        amount: item.amount,
+        value: item.amount,
+        color: getCategoryColor(category.name),
+      } : null;
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
   const currentMonthTotal = currentMonthSpending.reduce((total, item) => total + item.amount, 0);
-  const savingsTotal = accounts.filter((account) => account.type !== "credit").reduce((total, account) => total + account.balanceYen, 0);
-  const investmentTotal = investments.reduce((total, investment) => total + investment.currentBalanceYen, 0);
-  const liabilitiesTotal = accounts.filter((account) => account.type === "credit").reduce((total, account) => total + account.balanceYen, 0) - debts.reduce((total, debt) => total + Math.max(0, debt.currentBalanceYen), 0);
-  const netWorthData = months.map((month) => ({ month, savings: savingsTotal, investments: investmentTotal, liabilities: liabilitiesTotal, netWorth: savingsTotal + investmentTotal + liabilitiesTotal }));
+  const savingsTotalToday = accounts.filter((account) => account.type !== "credit").reduce((total, account) => total + account.balanceYen, 0);
+  const investmentTotalToday = investments.reduce((total, investment) => total + investment.currentBalanceYen, 0);
+  // Credit account balances are stored negative; debts linked to those accounts are already
+  // counted there, so only sum standalone debts to avoid the double-count.
+  const linkedAccountIds = new Set(accounts.filter((account) => account.type === "credit").map((account) => account.id));
+  const linkedAccountNames = new Set(accounts.filter((account) => account.type === "credit").map((account) => account.name));
+  const creditLiabilitiesToday = accounts.filter((account) => account.type === "credit").reduce((total, account) => total + Math.abs(account.balanceYen), 0);
+  const standaloneDebtsToday = debts
+    .filter((debt) => !debt.isPaid)
+    .filter((debt) => !(debt.accountId && linkedAccountIds.has(debt.accountId)))
+    .filter((debt) => !linkedAccountNames.has(debt.cardName))
+    .reduce((total, debt) => total + Math.max(0, debt.currentBalanceYen), 0);
+  const liabilitiesTotalToday = -(creditLiabilitiesToday + standaloneDebtsToday);
+  // Back-derive savings history from today's balance minus net cash flow in months strictly
+  // *after* each historical point. Investments + liabilities are held at current values since
+  // we don't store historical snapshots, so the line shows real cash-flow-driven movement
+  // against constant non-cash positions.
+  const monthIndex = new Map(months.map((m, index) => [m, index]));
+  const cashFlowByMonth = new Map(cashFlowData.map((row) => [row.month, row.net]));
+  const netWorthData = months.map((month) => {
+    const idx = monthIndex.get(month) ?? 0;
+    const futureNet = months.slice(idx + 1).reduce((total, m) => total + (cashFlowByMonth.get(m) ?? 0), 0);
+    const savings = savingsTotalToday - futureNet;
+    return {
+      month,
+      savings,
+      investments: investmentTotalToday,
+      liabilities: liabilitiesTotalToday,
+      netWorth: savings + investmentTotalToday + liabilitiesTotalToday,
+    };
+  });
 
   return (
     <div className="space-y-4">
@@ -1679,12 +2102,18 @@ function ReportsPage({ selectedMonth, transactions, incomeEntries, categories, a
       </ChartReportCard>
       <ChartReportCard title="Spending by category" hasEnoughData={hasEnoughData}>
         <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
-          <BarChart data={categoryData} layout="vertical">
+          <BarChart data={categoryDataRows} layout="vertical">
             <CartesianGrid strokeDasharray="3 3" stroke="#F0EFEB" horizontal={false} />
             <XAxis type="number" tickFormatter={compactCurrency} tick={{ fill: "#6B7280", fontSize: 11 }} />
             <YAxis dataKey="month" type="category" width={76} tick={{ fill: "#6B7280", fontSize: 11 }} />
-            <Tooltip formatter={(value, name) => { if (Math.abs(Number(value)) < CHART_MIN_VALUE) return ["", ""]; const c = categories.find((category) => category.id === name); return [formatJPY(Number(value)), c ? getCategoryDisplayName(c.name) : name]; }} contentStyle={{ backgroundColor: "white", border: "1px solid #F0EFEB", borderRadius: 8, fontSize: 12 }} />
-            {categories.map((category) => <Bar key={category.id} dataKey={category.id} stackId="spend" fill={getCategoryColor(category.name)} />)}
+            <Tooltip content={<CategoryStackTooltip categories={categories} maxSlots={maxCategorySlots} />} />
+            {Array.from({ length: maxCategorySlots }, (_, slot) => (
+              <Bar key={`s${slot}`} dataKey={`s${slot}`} stackId="spend">
+                {categoryDataRows.map((row, rowIndex) => (
+                  <Cell key={`s${slot}-${rowIndex}`} fill={String(row[`s${slot}_color`] ?? "transparent")} />
+                ))}
+              </Bar>
+            ))}
           </BarChart>
         </ResponsiveContainer>
       </ChartReportCard>
@@ -1743,6 +2172,58 @@ type MoneyForwardImportResponse = {
   accounts: Account[];
   categories: Category[];
 };
+
+type CategoryStackTooltipPayloadItem = {
+  value?: number | string;
+  name?: string | number;
+  color?: string;
+  dataKey?: string | number;
+  payload?: Record<string, unknown>;
+};
+
+function CategoryStackTooltip({ active, payload, label, categories, maxSlots }: {
+  active?: boolean;
+  payload?: CategoryStackTooltipPayloadItem[];
+  label?: string | number;
+  categories: Category[];
+  maxSlots?: number;
+}) {
+  if (!active || !payload?.length) return null;
+  const rowPayload = payload[0]?.payload ?? {};
+  const slots = maxSlots ?? payload.length;
+  const rows: Array<{ key: string; numeric: number; categoryId: string | undefined; color: string | undefined }> = [];
+  for (let i = 0; i < slots; i += 1) {
+    const numeric = Math.abs(Number(rowPayload[`s${i}`] ?? 0));
+    if (numeric < CHART_MIN_VALUE) continue;
+    rows.push({
+      key: `s${i}`,
+      numeric,
+      categoryId: typeof rowPayload[`s${i}_cat`] === "string" ? (rowPayload[`s${i}_cat`] as string) : undefined,
+      color: typeof rowPayload[`s${i}_color`] === "string" ? (rowPayload[`s${i}_color`] as string) : undefined,
+    });
+  }
+  if (rows.length === 0) return null;
+  return (
+    <div className="rounded-lg border border-[#F0EFEB] bg-white px-3 py-2 text-xs shadow-[0_4px_12px_rgba(17,24,39,0.06)]">
+      <p className="mb-1 text-[10px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">{label}</p>
+      <ul className="space-y-0.5">
+        {rows.map((item) => {
+          const category = categories.find((c) => c.id === item.categoryId);
+          const display = category ? getCategoryDisplayName(category.name) : item.categoryId ?? "";
+          return (
+            <li key={item.key} className="flex items-center justify-between gap-3">
+              <span className="flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: item.color }} />
+                <span className="text-slate-900">{display}</span>
+              </span>
+              <span className="tabular-nums text-[#6B7280]">{formatJPY(item.numeric)}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
 
 function ImportPage({ setAccounts, setCategories, setIncomeEntries, setTransactions }: { setAccounts: Dispatch<SetStateAction<Account[]>>; setCategories: Dispatch<SetStateAction<Category[]>>; setIncomeEntries: Dispatch<SetStateAction<IncomeEntry[]>>; setTransactions: Dispatch<SetStateAction<Transaction[]>> }) {
   const [fileName, setFileName] = useState<string | null>(null);
@@ -1894,7 +2375,7 @@ function MonthNavigator({ month, onPrevious, onNext }: { month: string; onPrevio
   );
 }
 
-function BudgetGroup({ name, rows, isCollapsed, toggleCollapsed, addCategory, deleteCategory, setAssignment, month, transactions, openActivityCategoryId, setOpenActivityCategoryId, expenseDraft, setExpenseDraft, logExpense, expenseError, estimatedAssignments }: { groupId: string; name: string; rows: ReturnType<typeof buildBudgetRows>; isCollapsed: boolean; toggleCollapsed: () => void; addCategory: () => void; deleteCategory: (category: Category) => void; setAssignment: (categoryId: string, value: number, isManuallySet?: boolean) => void; month: string; transactions: Transaction[]; openActivityCategoryId: string | null; setOpenActivityCategoryId: (categoryId: string | null) => void; expenseDraft: { payee: string; amountYen: number }; setExpenseDraft: (draft: { payee: string; amountYen: number }) => void; logExpense: (categoryId: string) => void; expenseError: string | null; estimatedAssignments: Record<string, boolean> }) {
+function BudgetGroup({ name, rows, isCollapsed, toggleCollapsed, addCategory, deleteCategory, setAssignment, month, transactions, openActivityCategoryId, setOpenActivityCategoryId, expenseDraft, setExpenseDraft, logExpense, expenseError, estimatedAssignments, goals, fundGoal }: { groupId: string; name: string; rows: ReturnType<typeof buildBudgetRows>; isCollapsed: boolean; toggleCollapsed: () => void; addCategory: () => void; deleteCategory: (category: Category) => void; setAssignment: (categoryId: string, value: number, isManuallySet?: boolean) => void; month: string; transactions: Transaction[]; openActivityCategoryId: string | null; setOpenActivityCategoryId: (categoryId: string | null) => void; expenseDraft: { payee: string; amountYen: number }; setExpenseDraft: (draft: { payee: string; amountYen: number }) => void; logExpense: (categoryId: string) => void; expenseError: string | null; estimatedAssignments: Record<string, boolean>; goals: SavingsGoal[]; fundGoal: (categoryId: string, allocation: number) => void }) {
   const groupAssigned = rows.reduce((total, row) => total + row.assignedYen, 0);
   const groupActivity = rows.reduce((total, row) => total + row.activityYen, 0);
   const groupAvailable = rows.reduce((total, row) => total + row.availableYen, 0);
@@ -1936,6 +2417,12 @@ function BudgetGroup({ name, rows, isCollapsed, toggleCollapsed, addCategory, de
           const availableClass = available < 0 ? "text-[#E5534B]" : available === 0 ? "text-[#6B7280]" : tone === "amber" ? "text-[#8A5A10]" : "text-[#2F7A58]";
           const rowTransactions = transactions.filter((transaction) => transaction.categoryId === row.category.id && transaction.date.startsWith(month));
           const isActivityOpen = openActivityCategoryId === row.category.id;
+          const linkedGoal = goals.find((goal) => goal.categoryId === row.category.id);
+          const goalProgress = linkedGoal && linkedGoal.targetAmountYen > 0 ? Math.min(100, Math.round((linkedGoal.currentSavedYen / linkedGoal.targetAmountYen) * 100)) : 0;
+          const goalIsComplete = linkedGoal ? Boolean(linkedGoal.completedAt) || linkedGoal.currentSavedYen >= linkedGoal.targetAmountYen : false;
+          const goalSuggested = linkedGoal && !goalIsComplete ? suggestedMonthlyForGoal(linkedGoal, month) : 0;
+          const goalRemaining = linkedGoal ? Math.max(0, linkedGoal.targetAmountYen - linkedGoal.currentSavedYen) : 0;
+          const fundAmount = linkedGoal ? Math.min(row.availableYen, goalRemaining) : 0;
           return (
             <motion.tr key={row.category.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18, ease: "easeOut" }} className="group border-t border-[#F0EFEB] transition hover:bg-[#FAFAF8]">
               <td className="py-2 pl-8 pr-4">
@@ -1943,9 +2430,33 @@ function BudgetGroup({ name, rows, isCollapsed, toggleCollapsed, addCategory, de
                   <button type="button" onClick={() => deleteCategory(row.category)} aria-label="Delete category" className="opacity-0 transition group-hover:opacity-100 rounded p-0.5 text-[#6B7280] hover:bg-[#FBE5E3] hover:text-[#E5534B]">
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
-                  <CategoryLabel name={row.category.name} className="text-sm text-slate-900" />
+                  {linkedGoal && <span className="text-base leading-none">{linkedGoal.emoji}</span>}
+                  <div className="min-w-0">
+                    <CategoryLabel name={row.category.name} className="text-sm text-slate-900" />
+                    {linkedGoal && (
+                      <p className="text-[11px] tabular-nums text-[#6B7280]">
+                        {formatJPY(linkedGoal.currentSavedYen)} / {formatJPY(linkedGoal.targetAmountYen)} · {goalProgress}%
+                        {!goalIsComplete && goalSuggested > 0 && (
+                          <span className="ml-1.5 normal-case text-[10px] text-[#9CA3AF]">· suggested {formatJPY(goalSuggested)}/mo</span>
+                        )}
+                        {goalIsComplete && (
+                          <span className="ml-1.5 text-[10px] font-medium uppercase tracking-[0.08em] text-[#2F7A58]">complete</span>
+                        )}
+                      </p>
+                    )}
+                  </div>
                   {estimatedAssignments[budgetKey(month, row.category.id)] && (
                     <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[#8A5A10]">estimated</span>
+                  )}
+                  {linkedGoal && fundAmount > 0 && !goalIsComplete && (
+                    <button
+                      type="button"
+                      onClick={() => fundGoal(row.category.id, fundAmount)}
+                      className="ml-auto rounded-md bg-[#4A7CFF]/10 px-2 py-0.5 text-[11px] font-medium text-[#2450B5] transition hover:bg-[#4A7CFF]/20"
+                      title="Move this row's available amount into the goal balance"
+                    >
+                      Fund {formatJPY(fundAmount)}
+                    </button>
                   )}
                 </div>
               </td>

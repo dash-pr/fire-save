@@ -15,7 +15,7 @@ import {
   UploadCloud,
   WalletCards,
 } from "lucide-react";
-import type { Account, CreditDebt, Investment } from "@/domain/types";
+import type { Account, CreditDebt, Investment, SavingsGoal } from "@/domain/types";
 import { formatJPY } from "@/lib/format";
 import { getAccountDisplayNames } from "@/lib/accounts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -38,6 +38,7 @@ export function Sidebar({
   accounts,
   investments,
   debts,
+  goals,
   netWorthYen,
   activePage,
   onNavigate,
@@ -49,6 +50,7 @@ export function Sidebar({
   accounts: Account[];
   investments: Investment[];
   debts: CreditDebt[];
+  goals: SavingsGoal[];
   netWorthYen: number;
   activePage: string;
   onNavigate: (page: string) => void;
@@ -63,6 +65,12 @@ export function Sidebar({
   const creditAccounts = visibleAccounts.filter((account) => account.type === "credit");
   const savingsAccounts = visibleAccounts.filter((account) => account.type !== "credit");
   const investedTotal = investments.reduce((total, investment) => total + investment.currentBalanceYen, 0);
+
+  const goalClaimsByAccount = new Map<string, number>();
+  goals.forEach((goal) => {
+    if (!goal.fundingAccountId || goal.currentSavedYen <= 0) return;
+    goalClaimsByAccount.set(goal.fundingAccountId, (goalClaimsByAccount.get(goal.fundingAccountId) ?? 0) + goal.currentSavedYen);
+  });
 
   const activeDebts = debts.filter((debt) => !debt.isPaid && debt.currentBalanceYen > 0);
   const debtsByAccount = new Map<string, CreditDebt[]>();
@@ -146,6 +154,7 @@ export function Sidebar({
                         key={account.id}
                         account={account}
                         debts={[]}
+                        goalClaimYen={0}
                         onClick={() => onSelectAccount(account.id)}
                         onEdit={(changes) => onEditAccount(account.id, changes)}
                       />
@@ -160,6 +169,7 @@ export function Sidebar({
                         key={account.id}
                         account={account}
                         debts={debtsByAccount.get(account.id) ?? []}
+                        goalClaimYen={0}
                         onClick={() => onSelectAccount(account.id)}
                         onEdit={(changes) => onEditAccount(account.id, changes)}
                       />
@@ -184,6 +194,7 @@ export function Sidebar({
                   key={account.id}
                   account={account}
                   debts={[]}
+                  goalClaimYen={goalClaimsByAccount.get(account.id) ?? 0}
                   onClick={() => onSelectAccount(account.id)}
                   onEdit={(changes) => onEditAccount(account.id, changes)}
                 />
@@ -299,37 +310,39 @@ function SidebarAccountSection({
   children: ReactNode;
   tone?: "green" | "red";
 }) {
+  const totalClass = tone === "red" && total < 0 ? "text-[#F5A598]" : "text-[#8B90B0]";
   return (
     <section>
-      <div className="group flex items-center gap-2 px-3">
-        <button
-          type="button"
-          onClick={onToggle}
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[11px] font-medium uppercase tracking-[0.08em] text-[#8B90B0] hover:text-white"
-        >
-          <ChevronDown
-            className={`h-3 w-3 shrink-0 transition ${collapsed ? "-rotate-90" : ""}`}
-          />
-          <span className="truncate">{title}</span>
-        </button>
-        <span
-          className={`shrink-0 text-right text-[11px] tabular-nums ${
-            tone === "red" && total < 0 ? "text-[#F5A598]" : "text-[#8B90B0]"
-          }`}
-        >
-          {formatJPY(total)}
-          {totalLabel && (
-            <span className="ml-1 normal-case tracking-normal text-[10px] text-[#8B90B0]/70">{totalLabel}</span>
+      <div className="group px-3">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onToggle}
+            className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[11px] font-medium uppercase tracking-[0.08em] text-[#8B90B0] hover:text-white"
+          >
+            <ChevronDown
+              className={`h-3 w-3 shrink-0 transition ${collapsed ? "-rotate-90" : ""}`}
+            />
+            <span className="truncate">{title}</span>
+          </button>
+          {!totalLabel && (
+            <span className={`shrink-0 text-right text-[11px] tabular-nums ${totalClass}`}>{formatJPY(total)}</span>
           )}
-        </span>
-        <button
-          type="button"
-          onClick={onAdd}
-          aria-label="Add account"
-          className="rounded-md p-1 text-[#8B90B0] opacity-0 transition hover:bg-white/[0.06] hover:text-white group-hover:opacity-100"
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
+          <button
+            type="button"
+            onClick={onAdd}
+            aria-label="Add account"
+            className="rounded-md p-1 text-[#8B90B0] opacity-0 transition hover:bg-white/[0.06] hover:text-white group-hover:opacity-100"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        {totalLabel && (
+          <div className="ml-[18px] mt-0.5 flex items-baseline justify-between gap-2 text-[11px] tabular-nums">
+            <span className={totalClass}>{formatJPY(total)}</span>
+            <span className="normal-case tracking-normal text-[10px] text-[#8B90B0]/70">{totalLabel}</span>
+          </div>
+        )}
       </div>
       <AnimatePresence initial={false}>
         {!collapsed && (
@@ -351,11 +364,13 @@ function SidebarAccountSection({
 function SidebarAccountRow({
   account,
   debts,
+  goalClaimYen,
   onClick,
   onEdit,
 }: {
   account: Account;
   debts: CreditDebt[];
+  goalClaimYen: number;
   onClick: () => void;
   onEdit: (changes: Partial<Account>) => void;
 }) {
@@ -375,6 +390,14 @@ function SidebarAccountRow({
       ? `${formatJPY(monthlyObligationYen)}/mo · ${remaining} remaining`
       : `${formatJPY(monthlyObligationYen)}/mo`
     : null;
+  // Usable balance = total balance minus the portion claimed by goals backed by this account.
+  const hasGoalClaim = goalClaimYen > 0;
+  const usableYen = hasGoalClaim ? account.balanceYen - goalClaimYen : account.balanceYen;
+  const subLine = obligationLine ?? (hasGoalClaim ? `Total ${formatJPY(account.balanceYen)} · ${formatJPY(goalClaimYen)} in goals` : null);
+  const balanceText = hasGoalClaim ? formatJPY(usableYen) : formatJPY(account.balanceYen);
+  const balanceClass = hasGoalClaim
+    ? usableYen < 0 ? "text-[#F5A598]" : "text-white/90"
+    : account.balanceYen < 0 ? "text-[#F5A598]" : "text-white/90";
   return (
     <button
       type="button"
@@ -384,7 +407,7 @@ function SidebarAccountRow({
         if (window.confirm("Edit this account? Choose Cancel to archive instead.")) editAccount();
         else archiveAccount();
       }}
-      className={`flex w-full min-w-0 items-start gap-2 rounded-md px-3 py-1.5 text-left text-[13px] text-[#8B90B0] hover:bg-white/[0.06] hover:text-white ${obligationLine ? "" : "h-8 items-center"}`}
+      className={`flex w-full min-w-0 items-start gap-2 rounded-md px-3 py-1.5 text-left text-[13px] text-[#8B90B0] hover:bg-white/[0.06] hover:text-white ${subLine ? "" : "h-8 items-center"}`}
     >
       <div className="min-w-0 flex-1">
         <Tooltip>
@@ -393,17 +416,11 @@ function SidebarAccountRow({
           </TooltipTrigger>
           <TooltipContent side="right">{tooltipLabel}</TooltipContent>
         </Tooltip>
-        {obligationLine && (
-          <span className="mt-0.5 block text-[11px] tabular-nums text-[#8B90B0]/75">{obligationLine}</span>
+        {subLine && (
+          <span className="mt-0.5 block text-[11px] tabular-nums text-[#8B90B0]/75">{subLine}</span>
         )}
       </div>
-      <span
-        className={`shrink-0 text-right tabular-nums ${
-          account.balanceYen < 0 ? "text-[#F5A598]" : "text-white/90"
-        }`}
-      >
-        {formatJPY(account.balanceYen)}
-      </span>
+      <span className={`shrink-0 text-right tabular-nums ${balanceClass}`}>{balanceText}</span>
     </button>
   );
 }
