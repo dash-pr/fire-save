@@ -8,6 +8,7 @@ import type {
   IncomeEntry,
   Investment,
   MerchantRule,
+  SavingsGoal,
   Transaction,
 } from "@/domain/types";
 import {
@@ -21,6 +22,7 @@ import {
   incomeEntries as sampleIncomeEntries,
   investments as sampleInvestments,
   merchantRules as sampleMerchantRules,
+  savingsGoals as sampleGoals,
   transactions as sampleTransactions,
 } from "@/data/sample-data";
 import { prisma } from "@/lib/prisma";
@@ -36,6 +38,7 @@ export type AppInitialData = {
   debts: CreditDebt[];
   investments: Investment[];
   merchantRules: MerchantRule[];
+  goals: SavingsGoal[];
   forecastInputs: ForecastInputs;
 };
 
@@ -50,6 +53,7 @@ export const sampleAppInitialData: AppInitialData = {
   debts: sampleDebts,
   investments: sampleInvestments,
   merchantRules: sampleMerchantRules,
+  goals: sampleGoals,
   forecastInputs: sampleForecastInputs,
 };
 
@@ -81,6 +85,7 @@ export async function loadAppInitialData(): Promise<AppInitialData> {
       debts,
       investments,
       merchantRules,
+      goals,
       settings,
     ] = await Promise.all([
       prisma.account.findMany({ where: { localUserId: "local-user" }, orderBy: [{ type: "asc" }, { name: "asc" }] }),
@@ -92,6 +97,7 @@ export async function loadAppInitialData(): Promise<AppInitialData> {
       prisma.creditDebt.findMany({ where: { localUserId: "local-user" }, orderBy: [{ createdAt: "asc" }] }),
       prisma.investment.findMany({ where: { localUserId: "local-user" }, orderBy: [{ accountName: "asc" }] }),
       prisma.merchantRule.findMany({ where: { localUserId: "local-user" }, orderBy: [{ createdAt: "desc" }] }),
+      prisma.savingsGoal.findMany({ where: { localUserId: "local-user" }, orderBy: [{ priorityOrder: "asc" }] }),
       prisma.fatfireSettings.findFirst({ where: { localUserId: "local-user" } }),
     ]);
 
@@ -183,6 +189,18 @@ export async function loadAppInitialData(): Promise<AppInitialData> {
         categoryId: rule.categoryId,
         fuzzyMatch: rule.fuzzyMatch,
         createdAt: rule.createdAt.toISOString(),
+      })),
+      goals: goals.map((goal) => ({
+        id: goal.id,
+        categoryId: goal.categoryId ?? undefined,
+        fundingAccountId: goal.fundingAccountId ?? undefined,
+        emoji: goal.emoji,
+        name: goal.name,
+        currentSavedYen: goal.currentSavedYen,
+        targetAmountYen: goal.targetAmountYen,
+        monthlyAllocationYen: goal.monthlyAllocationYen,
+        targetDate: dateToDay(goal.targetDate),
+        completedAt: goal.completedAt?.toISOString(),
       })),
       forecastInputs: settings ? {
         ...sampleForecastInputs,

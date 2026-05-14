@@ -80,9 +80,10 @@ model Account {
   isArchived   Boolean            @default(false)
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
-  transactions Transaction[]
-  recurring    RecurringExpense[]
-  creditDebts  CreditDebt[]
+  transactions  Transaction[]
+  recurring     RecurringExpense[]
+  creditDebts   CreditDebt[]
+  fundingGoals  SavingsGoal[]
 
   @@unique([localUserId, name])
   @@index([localUserId, type])
@@ -196,6 +197,7 @@ model SavingsGoal {
   id                   String              @id @default(cuid())
   localUserId          String              @default("local-user")
   categoryId           String?             @unique
+  fundingAccountId     String?
   emoji                String              @default("🎯")
   name                 String
   currentSavedYen      Int                 @default(0)
@@ -207,9 +209,11 @@ model SavingsGoal {
   createdAt            DateTime            @default(now())
   updatedAt            DateTime            @updatedAt
   category             Category?           @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  fundingAccount       Account?            @relation(fields: [fundingAccountId], references: [id], onDelete: SetNull)
   balanceUpdates       GoalBalanceUpdate[]
 
   @@unique([localUserId, name])
+  @@index([fundingAccountId])
 }
 
 model GoalBalanceUpdate {
