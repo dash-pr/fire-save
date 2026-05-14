@@ -247,21 +247,9 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
     });
   }, [goalState, selectedMonth]);
 
-  // Back-fill: any goal that pre-dates the auto-create-category logic gets a budget category
-  // (in grp-goals) and link so it shows up in the Budget tab's Savings Goals section.
-  useEffect(() => {
-    const orphans = goalState.filter((goal) => !goal.categoryId);
-    if (orphans.length === 0) return;
-    const newCategories: Category[] = [];
-    const linkedGoals = goalState.map((goal) => {
-      if (goal.categoryId) return goal;
-      const categoryId = makeLocalId("cat");
-      newCategories.push({ id: categoryId, groupId: "grp-goals", name: goal.name, source: "system" });
-      return { ...goal, categoryId };
-    });
-    setCategoryState((previous) => [...previous, ...newCategories]);
-    setGoalState(linkedGoals);
-  }, [goalState]);
+  // (Earlier "back-fill orphan goals" effect was removed — it generated client-only category
+  // IDs that never landed in Postgres, leaving orphans on reload. Goals are now created with
+  // their category atomically via POST /api/goals { createCategoryInGroupId }.)
 
   const setAssumption = (field: keyof ForecastInputs, value: string | number | boolean | undefined) => {
     setAssumptions((previous) => ({ ...previous, [field]: value }));
@@ -338,33 +326,34 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
       const next = typeof action === "function" ? (action as (p: SavingsGoal[]) => SavingsGoal[])(previous) : action;
       const previousById = new Map(previous.map((goal) => [goal.id, goal]));
       const nextById = new Map(next.map((goal) => [goal.id, goal]));
-      // Detect adds.
+      // Detect adds. Skip server-shaped ids (cuid prefix `c`, 24+ chars) — those came back from a
+      // direct POST in addGoal that already persisted; firing another POST would duplicate.
+      const isServerShapedId = (id: string) => /^c[a-z0-9]{24,}$/.test(id);
       next.forEach((goal) => {
-        if (!previousById.has(goal.id)) {
-          fetch("/api/goals", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              name: goal.name,
-              emoji: goal.emoji,
-              targetAmountYen: goal.targetAmountYen,
-              targetDate: goal.targetDate,
-              categoryId: goal.categoryId,
-              fundingAccountId: goal.fundingAccountId,
-              currentSavedYen: goal.currentSavedYen,
-              monthlyAllocationYen: goal.monthlyAllocationYen,
-            }),
+        if (previousById.has(goal.id)) return;
+        if (isServerShapedId(goal.id)) return;
+        fetch("/api/goals", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: goal.name,
+            emoji: goal.emoji,
+            targetAmountYen: goal.targetAmountYen,
+            targetDate: goal.targetDate,
+            categoryId: goal.categoryId,
+            fundingAccountId: goal.fundingAccountId,
+            currentSavedYen: goal.currentSavedYen,
+            monthlyAllocationYen: goal.monthlyAllocationYen,
+          }),
+        })
+          .then(async (response) => {
+            if (!response.ok) throw new Error(await response.text());
+            const payload = await response.json() as { goal: SavingsGoal };
+            if (payload.goal.id !== goal.id) {
+              setGoalState((current) => current.map((item) => item.id === goal.id ? payload.goal : item));
+            }
           })
-            .then(async (response) => {
-              if (!response.ok) throw new Error(await response.text());
-              const payload = await response.json() as { goal: SavingsGoal };
-              if (payload.goal.id !== goal.id) {
-                // Server assigned a real id; replace the optimistic one in state.
-                setGoalState((current) => current.map((item) => item.id === goal.id ? payload.goal : item));
-              }
-            })
-            .catch((error) => console.error("Failed to create goal", error));
-        }
+          .catch((error) => console.error("Failed to create goal", error));
       });
       // Detect deletes.
       previous.forEach((goal) => {
@@ -408,22 +397,25 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
       const next = typeof action === "function" ? (action as (p: Category[]) => Category[])(previous) : action;
       const previousById = new Map(previous.map((category) => [category.id, category]));
       const nextById = new Map(next.map((category) => [category.id, category]));
+      const isServerShapedId = (id: string) => /^c[a-z0-9]{24,}$/.test(id);
       next.forEach((category) => {
-        if (!previousById.has(category.id)) {
-          fetch("/api/categories", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ groupId: category.groupId, name: category.name, source: category.source }),
+        if (previousById.has(category.id)) return;
+        // Skip server-shaped ids — those came back from another endpoint (e.g. POST /api/goals
+        // with createCategoryInGroupId) that already persisted them.
+        if (isServerShapedId(category.id)) return;
+        fetch("/api/categories", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ groupId: category.groupId, name: category.name, source: category.source }),
+        })
+          .then(async (response) => {
+            if (!response.ok) throw new Error(await response.text());
+            const payload = await response.json() as { category: Category };
+            if (payload.category.id !== category.id) {
+              setCategoryState((current) => current.map((item) => item.id === category.id ? payload.category : item));
+            }
           })
-            .then(async (response) => {
-              if (!response.ok) throw new Error(await response.text());
-              const payload = await response.json() as { category: Category };
-              if (payload.category.id !== category.id) {
-                setCategoryState((current) => current.map((item) => item.id === category.id ? payload.category : item));
-              }
-            })
-            .catch((error) => console.error("Failed to create category", error));
-        }
+          .catch((error) => console.error("Failed to create category", error));
       });
       previous.forEach((category) => {
         const after = nextById.get(category.id);
@@ -2139,15 +2131,41 @@ function GoalsPage({ month, goals, setGoals, assignments, setCategories, transac
     date.setMonth(date.getMonth() + months);
     return formatMonth(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`);
   };
-  const addGoal = () => {
+  const addGoal = async () => {
     if (!draftGoal.name.trim()) return;
-    const id = makeLocalId("goal");
-    const categoryId = makeLocalId("cat");
-    const seedGoal: SavingsGoal = { id, categoryId, fundingAccountId: draftGoal.fundingAccountId || undefined, emoji: draftGoal.emoji, name: draftGoal.name.trim(), currentSavedYen: 0, targetAmountYen: draftGoal.targetAmountYen, monthlyAllocationYen: 0, targetDate: draftGoal.targetDate, notes: draftGoal.notes };
-    const suggested = suggestedMonthlyForGoal(seedGoal, month);
-    setCategories((previous) => [...previous, { id: categoryId, groupId: "grp-goals", name: draftGoal.name.trim(), source: "system" }]);
-    setGoals([...goals, { ...seedGoal, monthlyAllocationYen: suggested }]);
-    setAssignment(categoryId, suggested, false);
+    const seedForSuggested: SavingsGoal = { id: "tmp", emoji: draftGoal.emoji, name: draftGoal.name.trim(), currentSavedYen: 0, targetAmountYen: draftGoal.targetAmountYen, monthlyAllocationYen: 0, targetDate: draftGoal.targetDate };
+    const suggested = suggestedMonthlyForGoal(seedForSuggested, month);
+    // Single server-side transaction creates the linked Category + SavingsGoal atomically so the
+    // client never holds a local id that the DB doesn't know about. Avoids the race where a POST
+    // /api/goals fires before its POST /api/categories has resolved.
+    try {
+      const response = await fetch("/api/goals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: draftGoal.name.trim(),
+          emoji: draftGoal.emoji,
+          targetAmountYen: draftGoal.targetAmountYen,
+          targetDate: draftGoal.targetDate,
+          currentSavedYen: 0,
+          monthlyAllocationYen: suggested,
+          fundingAccountId: draftGoal.fundingAccountId || undefined,
+          createCategoryInGroupId: "grp-goals",
+        }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const payload = await response.json() as { goal: SavingsGoal };
+      const newCategory: Category | null = payload.goal.categoryId
+        ? { id: payload.goal.categoryId, groupId: "grp-goals", name: draftGoal.name.trim(), source: "system" }
+        : null;
+      if (newCategory) setCategories((previous) => previous.some((c) => c.id === newCategory.id) ? previous : [...previous, newCategory]);
+      setGoals([...goals, payload.goal]);
+      if (payload.goal.categoryId) setAssignment(payload.goal.categoryId, suggested, false);
+    } catch (error) {
+      console.error("Failed to create goal", error);
+      window.alert(`Could not create goal: ${error instanceof Error ? error.message : "unknown error"}`);
+      return;
+    }
     setDraftGoal({ name: "", emoji: "🎯", targetAmountYen: 0, targetDate: `${month}-28`, notes: "", fundingAccountId: defaultFundingAccountId });
     setIsCreating(false);
   };

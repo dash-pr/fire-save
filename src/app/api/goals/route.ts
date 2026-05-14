@@ -47,6 +47,8 @@ type CreateBody = {
   currentSavedYen?: number;
   monthlyAllocationYen?: number;
   notes?: string;
+  /** When set, the server creates a Category in this group and links the goal to it atomically. */
+  createCategoryInGroupId?: string;
 };
 
 export async function POST(request: Request) {
@@ -61,17 +63,39 @@ export async function POST(request: Request) {
   }
 
   try {
-    const goal = await prisma.savingsGoal.create({
-      data: {
-        name,
-        emoji: body.emoji?.trim() || "🎯",
-        targetAmountYen: Math.round(body.targetAmountYen ?? 0),
-        targetDate: new Date(`${body.targetDate}T00:00:00.000Z`),
-        currentSavedYen: Math.max(0, Math.round(body.currentSavedYen ?? 0)),
-        monthlyAllocationYen: Math.max(0, Math.round(body.monthlyAllocationYen ?? 0)),
-        ...(body.categoryId ? { category: { connect: { id: body.categoryId } } } : {}),
-        ...(body.fundingAccountId ? { fundingAccount: { connect: { id: body.fundingAccountId } } } : {}),
-      },
+    const goal = await prisma.$transaction(async (tx) => {
+      let categoryId = body.categoryId || undefined;
+      if (!categoryId && body.createCategoryInGroupId) {
+        // Find an existing category by name (re-use archived ones too) before creating a new one.
+        // This avoids the unique-constraint failure when the user re-creates a goal with the same name.
+        const existing = await tx.category.findFirst({
+          where: { localUserId: LOCAL_USER_ID, name },
+        });
+        if (existing) {
+          if (existing.isArchived) {
+            await tx.category.update({ where: { id: existing.id }, data: { isArchived: false, groupId: body.createCategoryInGroupId } });
+          }
+          categoryId = existing.id;
+        } else {
+          const created = await tx.category.create({
+            data: { localUserId: LOCAL_USER_ID, groupId: body.createCategoryInGroupId, name, source: "system" },
+          });
+          categoryId = created.id;
+        }
+      }
+
+      return tx.savingsGoal.create({
+        data: {
+          name,
+          emoji: body.emoji?.trim() || "🎯",
+          targetAmountYen: Math.round(body.targetAmountYen ?? 0),
+          targetDate: new Date(`${body.targetDate}T00:00:00.000Z`),
+          currentSavedYen: Math.max(0, Math.round(body.currentSavedYen ?? 0)),
+          monthlyAllocationYen: Math.max(0, Math.round(body.monthlyAllocationYen ?? 0)),
+          ...(categoryId ? { category: { connect: { id: categoryId } } } : {}),
+          ...(body.fundingAccountId ? { fundingAccount: { connect: { id: body.fundingAccountId } } } : {}),
+        },
+      });
     });
     return Response.json({ goal: serialize(goal) }, { status: 201 });
   } catch (error) {
