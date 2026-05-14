@@ -28,7 +28,7 @@ import { Card, MetricCard } from "@/components/shared/card";
 import { ProgressBar, StatusPill } from "@/components/shared/progress";
 import { nisaContributions } from "@/data/sample-data";
 import { buildBudgetRows, calculateActivityYen, calculateReadyToAssignYen, calculateSavingsRate, sortBudgetRowsByActivity, suggestedMonthlyForGoal } from "@/domain/budget";
-import { buildCardCycleBreakdown } from "@/domain/cardPayments";
+import { buildCardCycleBreakdown, extractCardSettlements, summarizeCardPayments } from "@/domain/cardPayments";
 import { calculateBunkatsuRemaining, calculateDebtSummary, calculateRiboPayoff, normalizeInterestRate } from "@/domain/debt";
 import {
   calculateAgeFromDob,
@@ -556,7 +556,7 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
 
           {activePage === "accounts" && <AccountsPage accounts={accountState} debts={debtState} goals={goalState} investments={investmentState} transactions={transactionState} onSelectAccount={(accountId) => { setTransactionAccountFilterIds([accountId]); setActivePage("transactions"); }} />}
 
-          {activePage === "transactions" && <TransactionsPage key={`${transactionAccountFilterIds.join(",")}:${transactionCategoryFilterIds.join(",")}`} month={selectedMonth} setMonth={setSelectedMonth} transactions={ruledTransactions} rawTransactions={transactionState} setTransactions={setTransactionState} incomeEntries={incomeEntryState} accounts={accountState} categories={activeCategories} merchantRules={merchantRuleState} setMerchantRules={setMerchantRuleState} initialAccountIds={transactionAccountFilterIds} initialCategoryIds={transactionCategoryFilterIds} />}
+          {activePage === "transactions" && <TransactionsPage key={`${transactionAccountFilterIds.join(",")}:${transactionCategoryFilterIds.join(",")}`} month={selectedMonth} setMonth={setSelectedMonth} transactions={ruledTransactions} rawTransactions={transactionState} setTransactions={setTransactionState} incomeEntries={incomeEntryState} accounts={accountState} categories={activeCategories} merchantRules={merchantRuleState} setMerchantRules={setMerchantRuleState} initialAccountIds={transactionAccountFilterIds} initialCategoryIds={transactionCategoryFilterIds} debts={debtState} />}
           {activePage === "debt" && <DebtPage month={selectedMonth} debts={debtState} setDebts={setDebtState} totalMonthlyObligationYen={debtSummary.totalMonthlyObligationYen} totalOutstandingYen={debtSummary.totalOutstandingYen} categoryGroups={categoryGroupState} categories={activeCategories} setCategories={persistCategories} transactions={transactionState} setTransactions={setTransactionState} />}
           {activePage === "goals" && <GoalsPage month={selectedMonth} goals={goalState} setGoals={persistGoals} assignments={assignments} setCategories={persistCategories} transactions={transactionState} setTransactions={setTransactionState} setAssignment={persistAssignment} accounts={accountState} />}
           {activePage === "investments" && <InvestmentsPage investments={investmentState} setInvestments={setInvestmentState} />}
@@ -993,7 +993,17 @@ type TransactionLedgerRow = {
   source: Transaction["source"] | "income";
 };
 
-function TransactionsPage({ month, setMonth, transactions, rawTransactions, setTransactions, incomeEntries, accounts, categories, merchantRules, setMerchantRules, initialAccountIds, initialCategoryIds }: { month: string; setMonth: (month: string) => void; transactions: Transaction[]; rawTransactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>>; incomeEntries: IncomeEntry[]; accounts: Account[]; categories: Category[]; merchantRules: MerchantRule[]; setMerchantRules: Dispatch<SetStateAction<MerchantRule[]>>; initialAccountIds: string[]; initialCategoryIds: string[] }) {
+function TransactionsPage({ month, setMonth, transactions, rawTransactions, setTransactions, incomeEntries, accounts, categories, merchantRules, setMerchantRules, initialAccountIds, initialCategoryIds, debts }: { month: string; setMonth: (month: string) => void; transactions: Transaction[]; rawTransactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>>; incomeEntries: IncomeEntry[]; accounts: Account[]; categories: Category[]; merchantRules: MerchantRule[]; setMerchantRules: Dispatch<SetStateAction<MerchantRule[]>>; initialAccountIds: string[]; initialCategoryIds: string[]; debts: CreditDebt[] }) {
+  const [activeView, setActiveView] = useState<"all" | "card-payments">(() => {
+    if (typeof window === "undefined") return "all";
+    return window.location.hash === "#card-payments" ? "card-payments" : "all";
+  });
+  const setView = (view: "all" | "card-payments") => {
+    setActiveView(view);
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", view === "card-payments" ? "#card-payments" : window.location.pathname);
+    }
+  };
   const [filters, setFilters] = useState<TransactionFilterState>({ search: "", accountIds: initialAccountIds, categoryIds: initialCategoryIds, type: "all" });
   const [groupBy, setGroupBy] = useState<"none" | "category" | "date">("none");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -1160,6 +1170,18 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
     <div className="space-y-4">
       <MonthNavigator month={month} onPrevious={() => setMonth(shiftMonth(month, -1))} onNext={() => setMonth(shiftMonth(month, 1))} />
 
+      <SubTabNav
+        active={activeView}
+        onChange={setView}
+        tabs={[
+          { key: "all", label: "All transactions" },
+          { key: "card-payments", label: "Card payments" },
+        ]}
+      />
+
+      {activeView === "card-payments" ? (
+        <CardPaymentsView month={month} accounts={accounts} debts={debts} transactions={rawTransactions} />
+      ) : (<>
       {stats.uncategorized > 0 && (
         <div className="flex items-center justify-between gap-4 rounded-lg bg-[#FBEFD9] px-4 py-2.5">
           <p className="text-sm text-[#8A5A10]">
@@ -1292,6 +1314,7 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
           </div>
         )}
       </Card>
+      </>)}
 
       {pendingDeleteTransaction && (
         <Modal onClose={() => { if (!isDeletingTransaction) setPendingDeleteTransaction(null); }} title="Delete this transaction?" width="420px">
@@ -1304,6 +1327,160 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
           </div>
         </Modal>
       )}
+    </div>
+  );
+}
+
+function SubTabNav<K extends string>({ active, onChange, tabs }: { active: K; onChange: (key: K) => void; tabs: Array<{ key: K; label: string; count?: number }> }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1 rounded-lg bg-white p-1 shadow-[0_1px_2px_rgba(17,24,39,0.04)]">
+      {tabs.map((tab) => {
+        const isActive = active === tab.key;
+        return (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => onChange(tab.key)}
+            className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition ${isActive ? "bg-slate-900 text-white" : "text-[#6B7280] hover:bg-[#FAFAF8] hover:text-slate-900"}`}
+          >
+            {tab.label}
+            {tab.count !== undefined && (
+              <span className={`tabular-nums ${isActive ? "text-white/70" : "text-[#6B7280]/70"}`}>{tab.count}</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Sparkline({ values, ariaLabel }: { values: number[]; ariaLabel?: string }) {
+  const width = 80;
+  const height = 22;
+  const max = Math.max(1, ...values);
+  const barWidth = Math.max(2, Math.floor(width / Math.max(1, values.length)) - 1);
+  return (
+    <svg width={width} height={height} role="img" aria-label={ariaLabel} className="text-[#4A7CFF]">
+      {values.map((value, index) => {
+        const h = max > 0 ? Math.max(2, Math.round((value / max) * (height - 2))) : 2;
+        const x = index * (barWidth + 1);
+        const y = height - h;
+        const isLast = index === values.length - 1;
+        return <rect key={index} x={x} y={y} width={barWidth} height={h} rx={1} fill="currentColor" opacity={isLast ? 1 : 0.45} />;
+      })}
+    </svg>
+  );
+}
+
+function CardPaymentsView({ month, accounts, debts, transactions }: {
+  month: string;
+  accounts: Account[];
+  debts: CreditDebt[];
+  transactions: Transaction[];
+}) {
+  const cardAccounts = accounts.filter((a) => !a.isArchived && a.type === "credit");
+  const settlements = useMemo(() => extractCardSettlements({ transactions, accounts }), [transactions, accounts]);
+  const summaries = useMemo(
+    () => cardAccounts.map((card) => summarizeCardPayments({ card, debts, settlements, currentMonth: month, monthsBack: 6 })),
+    [cardAccounts, debts, settlements, month],
+  );
+  const totalActualThisMonth = summaries.filter((s) => s.isActual).reduce((sum, s) => sum + s.paidThisMonthYen, 0);
+  const totalScheduled = summaries.filter((s) => !s.isActual).reduce((sum, s) => sum + s.paidThisMonthYen, 0);
+  const totalInterest = summaries.reduce((sum, s) => sum + s.estimatedInterestYen, 0);
+
+  // Comparison vs previous month (actuals only).
+  const previousMonth = shiftMonth(month, -1);
+  const previousMonthActual = summaries.reduce((sum, s) => sum + (s.history.find((h) => h.month === previousMonth)?.amountYen ?? 0), 0);
+  const monthDelta = previousMonthActual > 0 ? totalActualThisMonth - previousMonthActual : 0;
+
+  return (
+    <div className="space-y-4">
+      <section className="grid gap-4 xl:grid-cols-3">
+        <MetricCard
+          label="Paid to cards this month"
+          value={formatJPY(totalActualThisMonth)}
+          detail={previousMonthActual > 0 ? `${monthDelta >= 0 ? "+" : "−"}${formatJPY(Math.abs(monthDelta))} vs ${formatMonth(previousMonth)}` : "Bank settlements only"}
+          tone={totalActualThisMonth > 0 ? "blue" : "neutral"}
+        />
+        <MetricCard
+          label="Scheduled (no settlement seen)"
+          value={formatJPY(totalScheduled)}
+          detail="Estimated from monthly debt schedule"
+          tone={totalScheduled > 0 ? "amber" : "neutral"}
+        />
+        <MetricCard
+          label="Interest this month"
+          value={formatJPY(totalInterest)}
+          detail="Annual rate ÷ 12 × current ribo balance"
+          tone={totalInterest > 0 ? "red" : "neutral"}
+        />
+      </section>
+
+      <Card title="Per-card payments" eyebrow={formatMonth(month)}>
+        {cardAccounts.length === 0 ? (
+          <EmptyHint>No credit cards yet.</EmptyHint>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-[#F0EFEB] text-[10px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">
+                <th className="pb-2 pr-4 text-left">Card</th>
+                <th className="pb-2 pr-4 text-right">Paid this month</th>
+                <th className="pb-2 pr-4 text-right">Interest</th>
+                <th className="pb-2 pr-0 text-right">Last 6 months</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summaries.map((summary) => {
+                const railColor = summary.scheduledMonthlyYen === 0
+                  ? "bg-[#E8E7E3]"
+                  : debts.some((d) => d.type === "revolving" && (d.accountId === summary.card.id || d.cardName === summary.card.name))
+                    ? "bg-[#E5534B]"
+                    : "bg-[#F5A623]";
+                const { primary, secondary } = getAccountDisplayNames(summary.card.name);
+                return (
+                  <tr key={summary.card.id} className="border-b border-[#F0EFEB] last:border-b-0 transition hover:bg-[#FAFAF8]">
+                    <td className="py-2.5 pr-4">
+                      <div className="flex items-center gap-2.5">
+                        <span className={`inline-block h-7 w-1 shrink-0 rounded-full ${railColor}`} />
+                        <div className="min-w-0">
+                          <p className="text-sm text-slate-900">{primary}</p>
+                          {secondary && <p className="text-[11px] text-[#6B7280] opacity-80">{secondary}</p>}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="py-2.5 pr-4 text-right">
+                      <p className={`text-sm font-medium tabular-nums ${summary.isActual ? "text-slate-900" : "text-[#8A5A10]"}`}>{formatJPY(summary.paidThisMonthYen)}</p>
+                      <p className="text-[10px] text-[#6B7280]">{summary.isActual ? "Bank settlement" : "Scheduled"}</p>
+                    </td>
+                    <td className="py-2.5 pr-4 text-right text-sm tabular-nums text-slate-700">
+                      {summary.estimatedInterestYen > 0 ? formatJPY(summary.estimatedInterestYen) : <span className="text-[#9CA3AF]">—</span>}
+                    </td>
+                    <td className="py-2.5 pr-0 text-right">
+                      <div className="inline-block">
+                        <Sparkline
+                          values={summary.history.map((h) => h.amountYen)}
+                          ariaLabel={`Last 6 months of payments to ${primary}`}
+                        />
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">
+                <td className="pt-3 pr-4">Total</td>
+                <td className="pt-3 pr-4 text-right tabular-nums text-slate-900">{formatJPY(totalActualThisMonth + totalScheduled)}</td>
+                <td className="pt-3 pr-4 text-right tabular-nums text-slate-900">{formatJPY(totalInterest)}</td>
+                <td />
+              </tr>
+            </tfoot>
+          </table>
+        )}
+        <p className="mt-3 text-[11px] text-[#6B7280]">
+          Bank settlement values come from debit transactions on Yucho/Sony with a payee that matches a card. Where no settlement has appeared yet for a card this month, the row falls back to the scheduled monthly + monthly interest from the debt record.
+        </p>
+      </Card>
     </div>
   );
 }
