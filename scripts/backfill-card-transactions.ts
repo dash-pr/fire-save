@@ -95,7 +95,9 @@ async function main() {
     where: { localUserId: LOCAL_USER_ID, accountId: { in: cardAccounts.map((a) => a.id) } },
     select: { date: true, amountYen: true, payee: true, accountId: true, memo: true },
   });
-  const existingKeys = new Set(existingTxns.map((t) => `${t.accountId}|${t.date.toISOString().slice(0, 10)}|${t.amountYen}|${t.payee}`));
+  // Match by (account, date, amount) to absorb the case where the same charge has multiple
+  // payee spellings across import sources (e.g. "東京ガス" vs "東京ガス ・1168-418-1016").
+  const existingKeys = new Set(existingTxns.map((t) => `${t.accountId}|${t.date.toISOString().slice(0, 10)}|${t.amountYen}`));
   const existingMfIds = new Set(existingTxns.flatMap((t) => {
     const match = t.memo?.match(/MoneyForward ID: ([^|\s]+)/);
     return match ? [match[1].trim()] : [];
@@ -117,7 +119,7 @@ async function main() {
     // Skip transfers / 振替 rows; they're not real charges.
     if (row.isTransfer) { skipped += 1; continue; }
 
-    const key = `${cardAccount.id}|${row.date}|${row.amountYen}|${row.payee}`;
+    const key = `${cardAccount.id}|${row.date}|${row.amountYen}`;
     if (existingKeys.has(key) || (row.mfId && existingMfIds.has(row.mfId))) {
       skipped += 1;
       continue;

@@ -71,12 +71,21 @@ async function dedupeCsvTransactions() {
       include: { account: { select: { name: true } } },
     });
 
-    // Heuristic: keep the row whose payee does NOT match a raw MoneyForward bank prefix.
-    // These prefixes come from MoneyForward's secondary export and always pair with a richer
-    // descriptive row from the same source. If both or neither match, keep the earliest-created row.
+    // Heuristic: prefer card settlement rows (自払 …) when they exist on a non-credit account —
+    // those represent the bank debit and are what the Card Payments view depends on. Otherwise
+    // keep the row whose payee doesn't look like a raw MoneyForward prefix.
+    const isCardAccount = rows[0].account?.name && /(カード|Card|JCB|セゾン|楽天|Paidy|PayPay|メルカリ|三井住友|smbc)/i.test(rows[0].account.name);
+    const SETTLEMENT = /^(自払|メルペイ$|チャージ\(?入金\)?)/;
     const RAW_PREFIXES = /^(VISA国内利用|VISA海外利用|自払|振込|家賃|料 金)/;
-    const cleaner = rows.find((r) => !RAW_PREFIXES.test(r.payee));
-    const keeper = cleaner ?? rows[0];
+    let keeper = rows[0];
+    if (!isCardAccount) {
+      const settlement = rows.find((r) => SETTLEMENT.test(r.payee));
+      if (settlement) keeper = settlement;
+    }
+    if (keeper === rows[0]) {
+      const cleaner = rows.find((r) => !RAW_PREFIXES.test(r.payee));
+      if (cleaner) keeper = cleaner;
+    }
 
     for (const row of rows) {
       if (row.id === keeper.id) continue;
