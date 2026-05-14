@@ -259,7 +259,7 @@ function TabProjection({
               <CartesianGrid strokeDasharray="3 3" stroke="#F0EFEB" vertical={false} />
               <XAxis dataKey="age" tick={axisTick} label={{ value: "Age", position: "insideBottom", offset: -4, fill: "#6B7280", fontSize: 11 }} />
               <YAxis tickFormatter={compactCurrency} width={56} tick={axisTick} />
-              <Tooltip formatter={(value) => formatJPY(Number(value))} labelFormatter={(value) => `Age ${value}`} contentStyle={tooltipStyle} />
+              <Tooltip formatter={(value) => Math.abs(Number(value)) >= 100 ? formatJPY(Number(value)) : ""} labelFormatter={(value) => `Age ${value}`} contentStyle={tooltipStyle} />
 
               {inputs.includeMortgage !== false && (
                 <>
@@ -443,7 +443,7 @@ function TabCashFlow({ inputs, projection }: { inputs: ForecastInputs; projectio
               <CartesianGrid strokeDasharray="3 3" stroke="#F0EFEB" vertical={false} />
               <XAxis dataKey="age" tick={axisTick} />
               <YAxis tickFormatter={compactCurrency} width={56} tick={axisTick} />
-              <Tooltip formatter={(value) => formatJPY(Number(value))} labelFormatter={(value) => `Age ${value}`} contentStyle={tooltipStyle} />
+              <Tooltip formatter={(value) => Math.abs(Number(value)) >= 100 ? formatJPY(Number(value)) : ""} labelFormatter={(value) => `Age ${value}`} contentStyle={tooltipStyle} />
               <Area type="monotone" dataKey="investableMonthlyYen" name="Investable surplus" stroke="none" fill="#4CAF82" fillOpacity={0.25} />
               <Line type="monotone" dataKey="netMonthlyIncomeYen" name="Net income" stroke="#4A7CFF" strokeWidth={2} dot={false} />
               <Line type="monotone" dataKey="totalMonthlyExpensesYen" name="Expenses" stroke="#E5534B" strokeWidth={2} dot={false} />
@@ -525,7 +525,7 @@ function TabAllocation({ projection }: { projection: JapanProjectionResult }) {
               <CartesianGrid strokeDasharray="3 3" stroke="#F0EFEB" vertical={false} />
               <XAxis dataKey="age" tick={axisTick} />
               <YAxis tickFormatter={compactCurrency} width={56} tick={axisTick} />
-              <Tooltip formatter={(value) => formatJPY(Number(value))} contentStyle={tooltipStyle} />
+              <Tooltip formatter={(value) => Math.abs(Number(value)) >= 100 ? formatJPY(Number(value)) : ""} contentStyle={tooltipStyle} />
               <Area type="monotone" dataKey="iDeCoYen" name="iDeCo" stackId="portfolio" stroke="none" fill="#9B7EB5" fillOpacity={0.7} />
               <Area type="monotone" dataKey="nisaYen" name="NISA" stackId="portfolio" stroke="none" fill="#4A7CFF" fillOpacity={0.7} />
               <Area type="monotone" dataKey="taxableYen" name="Taxable" stackId="portfolio" stroke="none" fill="#4CAF82" fillOpacity={0.6} />
@@ -541,7 +541,7 @@ function TabAllocation({ projection }: { projection: JapanProjectionResult }) {
               <CartesianGrid strokeDasharray="3 3" stroke="#F0EFEB" vertical={false} />
               <XAxis dataKey="age" tick={axisTick} />
               <YAxis tickFormatter={compactCurrency} width={56} tick={axisTick} />
-              <Tooltip formatter={(value) => formatJPY(Number(value))} contentStyle={tooltipStyle} />
+              <Tooltip formatter={(value) => Math.abs(Number(value)) >= 100 ? formatJPY(Number(value)) : ""} contentStyle={tooltipStyle} />
               <Bar dataKey="iDeCo" name="iDeCo" stackId="contrib" fill="#9B7EB5" />
               <Bar dataKey="nisa" name="NISA" stackId="contrib" fill="#4A7CFF" />
               <Bar dataKey="taxable" name="Taxable" stackId="contrib" fill="#4CAF82" />
@@ -557,7 +557,7 @@ function TabAllocation({ projection }: { projection: JapanProjectionResult }) {
               <CartesianGrid strokeDasharray="3 3" stroke="#F0EFEB" vertical={false} />
               <XAxis dataKey="age" tick={axisTick} />
               <YAxis tickFormatter={compactCurrency} width={56} tick={axisTick} />
-              <Tooltip formatter={(value) => formatJPY(Number(value))} contentStyle={tooltipStyle} />
+              <Tooltip formatter={(value) => Math.abs(Number(value)) >= 100 ? formatJPY(Number(value)) : ""} contentStyle={tooltipStyle} />
               <Bar dataKey="iDeCoTaxSaving" name="iDeCo tax saving" fill="#4CAF82" />
             </BarChart>
           </ResponsiveContainer>
@@ -604,7 +604,7 @@ function TabPhases({ inputs, projection }: { inputs: ForecastInputs; projection:
               <CartesianGrid strokeDasharray="3 3" stroke="#F0EFEB" vertical={false} />
               <XAxis dataKey="age" tick={axisTick} />
               <YAxis tickFormatter={compactCurrency} width={56} tick={axisTick} />
-              <Tooltip formatter={(value) => formatJPY(Number(value))} contentStyle={tooltipStyle} />
+              <Tooltip formatter={(value) => Math.abs(Number(value)) >= 100 ? formatJPY(Number(value)) : ""} contentStyle={tooltipStyle} />
               <Line type="monotone" dataKey="phased" name="Phased" stroke="#4A7CFF" strokeWidth={2.5} dot={false} />
               <Line type="monotone" dataKey="flat" name="Flat" stroke="#9B7EB5" strokeWidth={1.8} strokeDasharray="5 3" dot={false} />
             </LineChart>
@@ -827,7 +827,7 @@ function TabProbability({ inputs, scenario }: { inputs: ForecastInputs; scenario
                   <CartesianGrid strokeDasharray="3 3" stroke="#F0EFEB" vertical={false} />
                   <XAxis dataKey="age" tick={axisTick} />
                   <YAxis tickFormatter={compactCurrency} width={56} tick={axisTick} />
-                  <Tooltip formatter={(value) => formatJPY(Number(value))} contentStyle={tooltipStyle} />
+                  <Tooltip formatter={(value) => Math.abs(Number(value)) >= 100 ? formatJPY(Number(value)) : ""} contentStyle={tooltipStyle} />
                   <Area type="monotone" dataKey="p90" stroke="none" fill="#4A7CFF" fillOpacity={0.08} />
                   <Area type="monotone" dataKey="p75" stroke="none" fill="#4A7CFF" fillOpacity={0.15} />
                   <Area type="monotone" dataKey="p25" stroke="none" fill="#4A7CFF" fillOpacity={0.15} />

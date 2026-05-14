@@ -166,14 +166,15 @@ model RecurringExpense {
 }
 
 model Budget {
-  id          String   @id @default(cuid())
-  localUserId String   @default("local-user")
-  categoryId  String
-  month       DateTime @db.Date
-  assignedYen Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  category    Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  id             String   @id @default(cuid())
+  localUserId    String   @default("local-user")
+  categoryId     String
+  month          DateTime @db.Date
+  assignedYen    Int      @default(0)
+  isManuallySet  Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  category       Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
 
   @@unique([categoryId, month])
   @@index([localUserId, month])

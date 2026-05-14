@@ -144,6 +144,7 @@ export async function loadAppInitialData(): Promise<AppInitialData> {
         categoryId: budget.categoryId,
         month: dateToMonth(budget.month),
         assignedYen: budget.assignedYen,
+        isManuallySet: budget.isManuallySet,
       })),
       incomeEntries: serializedIncomeEntries,
       transactions: serializedTransactions,

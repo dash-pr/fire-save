@@ -15,7 +15,7 @@ import {
   UploadCloud,
   WalletCards,
 } from "lucide-react";
-import type { Account, Investment } from "@/domain/types";
+import type { Account, CreditDebt, Investment } from "@/domain/types";
 import { formatJPY } from "@/lib/format";
 import { getAccountDisplayNames } from "@/lib/accounts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -37,6 +37,7 @@ export function Sidebar({
   user,
   accounts,
   investments,
+  debts,
   netWorthYen,
   activePage,
   onNavigate,
@@ -47,6 +48,7 @@ export function Sidebar({
   user: AppUser;
   accounts: Account[];
   investments: Investment[];
+  debts: CreditDebt[];
   netWorthYen: number;
   activePage: string;
   onNavigate: (page: string) => void;
@@ -61,6 +63,22 @@ export function Sidebar({
   const creditAccounts = visibleAccounts.filter((account) => account.type === "credit");
   const savingsAccounts = visibleAccounts.filter((account) => account.type !== "credit");
   const investedTotal = investments.reduce((total, investment) => total + investment.currentBalanceYen, 0);
+
+  const activeDebts = debts.filter((debt) => !debt.isPaid && debt.currentBalanceYen > 0);
+  const debtsByAccount = new Map<string, CreditDebt[]>();
+  activeDebts.forEach((debt) => {
+    const matchByAccountId = debt.accountId;
+    const matchByName = creditAccounts.find((account) => account.name === debt.cardName)?.id;
+    const accountId = matchByAccountId ?? matchByName;
+    if (!accountId) return;
+    debtsByAccount.set(accountId, [...(debtsByAccount.get(accountId) ?? []), debt]);
+  });
+  const revolvingCards = creditAccounts.filter((account) => (debtsByAccount.get(account.id)?.length ?? 0) > 0);
+  const paidInFullCards = creditAccounts
+    .filter((account) => (debtsByAccount.get(account.id)?.length ?? 0) === 0)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const sortedRevolving = [...revolvingCards].sort((a, b) => Math.abs(b.balanceYen) - Math.abs(a.balanceYen));
+  const totalRevolvingBalance = sortedRevolving.reduce((total, account) => total + account.balanceYen, 0);
   const saveAccount = () => {
     if (!addType || !draft.name.trim()) return;
     onAddAccount({
@@ -109,7 +127,8 @@ export function Sidebar({
         <div className="mt-8 space-y-5">
           <SidebarAccountSection
             title="Credit Cards"
-            total={creditAccounts.reduce((total, account) => total + account.balanceYen, 0)}
+            total={totalRevolvingBalance}
+            totalLabel="total revolving"
             collapsed={collapsed.credit ?? false}
             onToggle={() => setCollapsed((previous) => ({ ...previous, credit: !previous.credit }))}
             onAdd={() => setAddType("credit")}
@@ -118,14 +137,36 @@ export function Sidebar({
             {creditAccounts.length === 0 ? (
               <EmptySectionHint>No cards yet</EmptySectionHint>
             ) : (
-              creditAccounts.map((account) => (
-                <SidebarAccountRow
-                  key={account.id}
-                  account={account}
-                  onClick={() => onSelectAccount(account.id)}
-                  onEdit={(changes) => onEditAccount(account.id, changes)}
-                />
-              ))
+              <>
+                {paidInFullCards.length > 0 && (
+                  <div className="mb-1.5">
+                    <p className="px-3 pb-0.5 pt-1 text-[10px] font-medium uppercase tracking-[0.08em] text-[#8B90B0]/80">Paid in Full</p>
+                    {paidInFullCards.map((account) => (
+                      <SidebarAccountRow
+                        key={account.id}
+                        account={account}
+                        debts={[]}
+                        onClick={() => onSelectAccount(account.id)}
+                        onEdit={(changes) => onEditAccount(account.id, changes)}
+                      />
+                    ))}
+                  </div>
+                )}
+                {sortedRevolving.length > 0 && (
+                  <div>
+                    <p className="px-3 pb-0.5 pt-1 text-[10px] font-medium uppercase tracking-[0.08em] text-[#8B90B0]/80">Revolving &amp; Installments</p>
+                    {sortedRevolving.map((account) => (
+                      <SidebarAccountRow
+                        key={account.id}
+                        account={account}
+                        debts={debtsByAccount.get(account.id) ?? []}
+                        onClick={() => onSelectAccount(account.id)}
+                        onEdit={(changes) => onEditAccount(account.id, changes)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </SidebarAccountSection>
           <SidebarAccountSection
@@ -142,6 +183,7 @@ export function Sidebar({
                 <SidebarAccountRow
                   key={account.id}
                   account={account}
+                  debts={[]}
                   onClick={() => onSelectAccount(account.id)}
                   onEdit={(changes) => onEditAccount(account.id, changes)}
                 />
@@ -241,6 +283,7 @@ export function Sidebar({
 function SidebarAccountSection({
   title,
   total,
+  totalLabel,
   collapsed,
   onToggle,
   onAdd,
@@ -249,6 +292,7 @@ function SidebarAccountSection({
 }: {
   title: string;
   total: number;
+  totalLabel?: string;
   collapsed: boolean;
   onToggle: () => void;
   onAdd: () => void;
@@ -269,11 +313,14 @@ function SidebarAccountSection({
           <span className="truncate">{title}</span>
         </button>
         <span
-          className={`shrink-0 text-[11px] tabular-nums ${
+          className={`shrink-0 text-right text-[11px] tabular-nums ${
             tone === "red" && total < 0 ? "text-[#F5A598]" : "text-[#8B90B0]"
           }`}
         >
           {formatJPY(total)}
+          {totalLabel && (
+            <span className="ml-1 normal-case tracking-normal text-[10px] text-[#8B90B0]/70">{totalLabel}</span>
+          )}
         </span>
         <button
           type="button"
@@ -303,10 +350,12 @@ function SidebarAccountSection({
 
 function SidebarAccountRow({
   account,
+  debts,
   onClick,
   onEdit,
 }: {
   account: Account;
+  debts: CreditDebt[];
   onClick: () => void;
   onEdit: (changes: Partial<Account>) => void;
 }) {
@@ -318,6 +367,14 @@ function SidebarAccountRow({
   const archiveAccount = () => onEdit({ isArchived: true } as Partial<Account>);
   const { primary, secondary } = getAccountDisplayNames(account.name);
   const tooltipLabel = secondary ?? account.name;
+  const monthlyObligationYen = debts.reduce((total, debt) => total + (debt.monthlyPaymentYen ?? 0), 0);
+  const installment = debts.find((debt) => debt.type === "installment" && (debt.totalInstallments ?? 0) > 0);
+  const remaining = installment ? Math.max(0, (installment.totalInstallments ?? 0) - (installment.installmentsPaid ?? 0)) : 0;
+  const obligationLine = monthlyObligationYen > 0
+    ? installment && remaining > 0 && debts.length === 1
+      ? `${formatJPY(monthlyObligationYen)}/mo · ${remaining} remaining`
+      : `${formatJPY(monthlyObligationYen)}/mo`
+    : null;
   return (
     <button
       type="button"
@@ -327,14 +384,19 @@ function SidebarAccountRow({
         if (window.confirm("Edit this account? Choose Cancel to archive instead.")) editAccount();
         else archiveAccount();
       }}
-      className="flex h-8 w-full min-w-0 items-center gap-2 rounded-md px-3 text-left text-[13px] text-[#8B90B0] hover:bg-white/[0.06] hover:text-white"
+      className={`flex w-full min-w-0 items-start gap-2 rounded-md px-3 py-1.5 text-left text-[13px] text-[#8B90B0] hover:bg-white/[0.06] hover:text-white ${obligationLine ? "" : "h-8 items-center"}`}
     >
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="min-w-0 flex-1 truncate">{primary}</span>
-        </TooltipTrigger>
-        <TooltipContent side="right">{tooltipLabel}</TooltipContent>
-      </Tooltip>
+      <div className="min-w-0 flex-1">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="block truncate">{primary}</span>
+          </TooltipTrigger>
+          <TooltipContent side="right">{tooltipLabel}</TooltipContent>
+        </Tooltip>
+        {obligationLine && (
+          <span className="mt-0.5 block text-[11px] tabular-nums text-[#8B90B0]/75">{obligationLine}</span>
+        )}
+      </div>
       <span
         className={`shrink-0 text-right tabular-nums ${
           account.balanceYen < 0 ? "text-[#F5A598]" : "text-white/90"

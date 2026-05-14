@@ -36,9 +36,10 @@ export function buildBudgetRows(args: {
   month: string;
 }): BudgetRow[] {
   return args.categories.map((category) => {
-    const assignedYen = args.assignments.find(
-      (assignment) => assignment.categoryId === category.id && assignment.month === args.month,
-    )?.assignedYen ?? 0;
+    const assignment = args.assignments.find(
+      (item) => item.categoryId === category.id && item.month === args.month,
+    );
+    const assignedYen = assignment?.assignedYen ?? 0;
     const activityYen = calculateActivityYen(args.transactions, category.id, args.month);
     const availableYen = calculateAvailableYen(assignedYen, activityYen);
 
@@ -48,7 +49,19 @@ export function buildBudgetRows(args: {
       activityYen,
       availableYen,
       status: getBudgetStatus(assignedYen, activityYen, availableYen),
+      isManuallySet: assignment?.isManuallySet ?? false,
     };
+  });
+}
+
+export function sortBudgetRowsByActivity(rows: BudgetRow[]): BudgetRow[] {
+  return [...rows].sort((a, b) => {
+    if (a.activityYen === 0 && b.activityYen === 0) {
+      return a.category.name.localeCompare(b.category.name);
+    }
+    if (a.activityYen === 0) return 1;
+    if (b.activityYen === 0) return -1;
+    return b.activityYen - a.activityYen;
   });
 }
 

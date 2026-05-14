@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -10,7 +10,10 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   Line,
+  Pie,
+  PieChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -27,7 +30,7 @@ import {
   nisaContributions,
   savingsGoals,
 } from "@/data/sample-data";
-import { buildBudgetRows, calculateReadyToAssignYen, calculateSavingsRate } from "@/domain/budget";
+import { buildBudgetRows, calculateActivityYen, calculateReadyToAssignYen, calculateSavingsRate, sortBudgetRowsByActivity } from "@/domain/budget";
 import { calculateBunkatsuRemaining, calculateDebtSummary, calculateRiboPayoff, normalizeInterestRate } from "@/domain/debt";
 import {
   calculateAgeFromDob,
@@ -44,6 +47,8 @@ import { getCategoryDisplayName } from "@/lib/categories";
 import { getMerchantContextTag } from "@/lib/merchants";
 import { getAccountDisplayNames } from "@/lib/accounts";
 import { DEBT_TYPE_LABELS } from "@/lib/debtTypes";
+import { getCategoryColor } from "@/lib/chartColors";
+import { CHART_MIN_VALUE, filterLegendItems, sortChartDataDescending } from "@/lib/chartUtils";
 import {
   Tooltip as JpTooltip,
   TooltipContent as JpTooltipContent,
@@ -126,8 +131,11 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
   const [categoryState, setCategoryState] = useState<Category[]>(initialData.categories);
   const [transactionState, setTransactionState] = useState<Transaction[]>(initialData.transactions);
   const [merchantRuleState, setMerchantRuleState] = useState<MerchantRule[]>(initialData.merchantRules);
-  const [assignmentState, setAssignmentState] = useState<Record<string, number>>(
-    Object.fromEntries(initialData.budgetAssignments.map((assignment) => [budgetKey(assignment.month, assignment.categoryId), assignment.assignedYen])),
+  const [assignmentState, setAssignmentState] = useState<Record<string, { assignedYen: number; isManuallySet: boolean }>>(
+    Object.fromEntries(initialData.budgetAssignments.map((assignment) => [
+      budgetKey(assignment.month, assignment.categoryId),
+      { assignedYen: assignment.assignedYen, isManuallySet: assignment.isManuallySet ?? false },
+    ])),
   );
   const [estimatedAssignments, setEstimatedAssignments] = useState<Record<string, boolean>>({});
   const [budgetNotice, setBudgetNotice] = useState<string | null>(null);
@@ -150,7 +158,10 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
     monthlyContributionYen: assumptions.monthlyInvestmentOverrideYen ?? assumptions.monthlyContributionYen,
   };
   const assignments = useMemo(
-    () => activeCategories.map((category) => ({ categoryId: category.id, month: selectedMonth, assignedYen: assignmentState[budgetKey(selectedMonth, category.id)] ?? 0 })),
+    () => activeCategories.map((category) => {
+      const entry = assignmentState[budgetKey(selectedMonth, category.id)];
+      return { categoryId: category.id, month: selectedMonth, assignedYen: entry?.assignedYen ?? 0, isManuallySet: entry?.isManuallySet ?? false };
+    }),
     [activeCategories, assignmentState, selectedMonth],
   );
   const budgetRows = useMemo(
@@ -183,6 +194,32 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
     monthlyIncomeYen: incomeYen,
   });
 
+  // Auto-assign rule (Fix 5a): for each (category, month) with transaction activity, if there is no budget
+  // record yet, create one matching the activity total. If an existing record was never manually set,
+  // refresh it to match current activity. Manually-set records are never overwritten.
+  useEffect(() => {
+    setAssignmentState((previous) => {
+      let changed = false;
+      const next = { ...previous };
+      const seen = new Set<string>();
+      transactionState.forEach((transaction) => {
+        if (transaction.type !== "debit" || !transaction.categoryId) return;
+        const month = transaction.date.slice(0, 7);
+        const key = budgetKey(month, transaction.categoryId);
+        if (seen.has(key)) return;
+        seen.add(key);
+        const activity = calculateActivityYen(transactionState, transaction.categoryId, month);
+        const current = next[key];
+        if (current?.isManuallySet) return;
+        if (!current || current.assignedYen !== activity) {
+          next[key] = { assignedYen: activity, isManuallySet: false };
+          changed = true;
+        }
+      });
+      return changed ? next : previous;
+    });
+  }, [transactionState]);
+
   const setAssumption = (field: keyof ForecastInputs, value: string | number | boolean | undefined) => {
     setAssumptions((previous) => ({ ...previous, [field]: value }));
   };
@@ -198,15 +235,15 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
     const previousMonth = shiftMonth(month, -1);
     const previousIncomeEntries = incomeEntryState.filter((entry) => entry.month === previousMonth);
     const previousIncome = previousIncomeEntries.reduce((total, entry) => total + entry.amountYen, 0);
-    const nextAssignments: Record<string, number> = {};
+    const nextAssignments: Record<string, { assignedYen: number; isManuallySet: boolean }> = {};
     let fixedAssigned = 0;
     let lifestyleAssigned = 0;
 
     activeCategories.forEach((category) => {
-      const previousAmount = assignmentState[budgetKey(previousMonth, category.id)] ?? 0;
+      const previousAmount = assignmentState[budgetKey(previousMonth, category.id)]?.assignedYen ?? 0;
       if (isFixedPriorityCategory(category)) fixedAssigned += previousAmount;
       else if (isLifestyleCategory(category)) lifestyleAssigned += previousAmount;
-      nextAssignments[budgetKey(month, category.id)] = previousAmount;
+      nextAssignments[budgetKey(month, category.id)] = { assignedYen: previousAmount, isManuallySet: false };
     });
 
     let notice = "New month created from the previous month. Review estimates before relying on them.";
@@ -223,7 +260,8 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
       const trimRatio = availableForLifestyle / lifestyleAssigned;
       activeCategories.filter(isLifestyleCategory).forEach((category) => {
         const key = budgetKey(month, category.id);
-        nextAssignments[key] = Math.floor((nextAssignments[key] ?? 0) * trimRatio);
+        const existing = nextAssignments[key]?.assignedYen ?? 0;
+        nextAssignments[key] = { assignedYen: Math.floor(existing * trimRatio), isManuallySet: false };
       });
       notice = "Budget adjusted to fit income. Review lifestyle categories.";
     }
@@ -243,7 +281,7 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
     <div className="min-h-screen bg-[#F5F4F0] text-slate-900">
       <WelcomeToast />
       <div className="flex">
-        <Sidebar user={user} accounts={accountState} investments={investmentState} netWorthYen={netWorth.netWorthYen} activePage={activePage} onNavigate={(pageKey) => setActivePage(pageKey as PageKey)} onAddAccount={(account) => setAccountState((previous) => [...previous, account])} onEditAccount={(id, changes) => setAccountState((previous) => previous.map((account) => account.id === id ? { ...account, ...changes } : account))} onSelectAccount={(accountId) => { setTransactionAccountFilterIds([accountId]); setActivePage("transactions"); }} />
+        <Sidebar user={user} accounts={accountState} investments={investmentState} debts={debtState} netWorthYen={netWorth.netWorthYen} activePage={activePage} onNavigate={(pageKey) => setActivePage(pageKey as PageKey)} onAddAccount={(account) => setAccountState((previous) => [...previous, account])} onEditAccount={(id, changes) => setAccountState((previous) => previous.map((account) => account.id === id ? { ...account, ...changes } : account))} onSelectAccount={(accountId) => { setTransactionAccountFilterIds([accountId]); setActivePage("transactions"); }} />
         <main className="min-w-0 flex-1 px-8 py-8">
           <header className="mb-6 flex items-start justify-between gap-4">
             <div>
@@ -258,7 +296,7 @@ export default function AppShell({ initialData, user }: { children?: ReactNode; 
 
           {activePage === "home" && <HomePage readyToAssignYen={readyToAssignYen} netWorthYen={netWorth.netWorthYen} savingsRate={savingsRate} fatfireAge={deterministic.estimatedFatfireAge} healthScore={health.score} uncategorizedCount={uncategorizedCount} overspentCount={overspentCount} contributionDeltaYen={deterministic.contributionDeltaYen} accounts={accountState} onNavigate={setActivePage} />}
 
-          {activePage === "budget" && <BudgetPage month={selectedMonth} setMonth={openBudgetMonth} incomeEntries={currentIncomeEntries} setIncomeEntries={setIncomeEntryState} readyToAssignYen={readyToAssignYen} budgetRows={visibleBudgetRows} fullBudgetRows={budgetRows} budgetFilter={budgetFilter} setBudgetFilter={setBudgetFilter} categoryGroups={categoryGroupState} categoryList={activeCategories} setCategories={setCategoryState} transactions={transactionState} setTransactions={setTransactionState} budgetNotice={budgetNotice} estimatedAssignments={estimatedAssignments} setAssignment={(categoryId, value) => setAssignmentState((previous) => ({ ...previous, [budgetKey(selectedMonth, categoryId)]: value }))} assignments={assignments} />}
+          {activePage === "budget" && <BudgetPage month={selectedMonth} setMonth={openBudgetMonth} incomeEntries={currentIncomeEntries} setIncomeEntries={setIncomeEntryState} readyToAssignYen={readyToAssignYen} budgetRows={visibleBudgetRows} fullBudgetRows={budgetRows} budgetFilter={budgetFilter} setBudgetFilter={setBudgetFilter} categoryGroups={categoryGroupState} categoryList={activeCategories} setCategories={setCategoryState} transactions={transactionState} setTransactions={setTransactionState} budgetNotice={budgetNotice} estimatedAssignments={estimatedAssignments} setAssignment={(categoryId, value, isManuallySet = true) => setAssignmentState((previous) => ({ ...previous, [budgetKey(selectedMonth, categoryId)]: { assignedYen: value, isManuallySet } }))} assignments={assignments} />}
 
           {activePage === "transactions" && <TransactionsPage key={`${transactionAccountFilterIds.join(",")}:${transactionCategoryFilterIds.join(",")}`} month={selectedMonth} setMonth={setSelectedMonth} transactions={ruledTransactions} rawTransactions={transactionState} setTransactions={setTransactionState} accounts={accountState} categories={activeCategories} merchantRules={merchantRuleState} setMerchantRules={setMerchantRuleState} initialAccountIds={transactionAccountFilterIds} initialCategoryIds={transactionCategoryFilterIds} />}
           {activePage === "debt" && <DebtPage month={selectedMonth} debts={debtState} setDebts={setDebtState} totalMonthlyObligationYen={debtSummary.totalMonthlyObligationYen} totalOutstandingYen={debtSummary.totalOutstandingYen} categoryGroups={categoryGroupState} categories={activeCategories} setCategories={setCategoryState} transactions={transactionState} setTransactions={setTransactionState} />}
@@ -334,7 +372,7 @@ function HomePage({ readyToAssignYen, netWorthYen, savingsRate, fatfireAge, heal
   );
 }
 
-function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToAssignYen, budgetRows, fullBudgetRows, budgetFilter, setBudgetFilter, categoryGroups, categoryList, setCategories, transactions, setTransactions, budgetNotice, estimatedAssignments, setAssignment, assignments }: { month: string; setMonth: (month: string) => void; incomeEntries: IncomeEntry[]; setIncomeEntries: Dispatch<SetStateAction<IncomeEntry[]>>; readyToAssignYen: number; budgetRows: ReturnType<typeof buildBudgetRows>; fullBudgetRows: ReturnType<typeof buildBudgetRows>; budgetFilter: "all" | "overspent" | "underfunded" | "funded"; setBudgetFilter: (filter: "all" | "overspent" | "underfunded" | "funded") => void; categoryGroups: CategoryGroup[]; categoryList: Category[]; setCategories: Dispatch<SetStateAction<Category[]>>; transactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>>; budgetNotice: string | null; estimatedAssignments: Record<string, boolean>; setAssignment: (categoryId: string, value: number) => void; assignments: BudgetAssignment[] }) {
+function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToAssignYen, budgetRows, fullBudgetRows, budgetFilter, setBudgetFilter, categoryGroups, categoryList, setCategories, transactions, setTransactions, budgetNotice, estimatedAssignments, setAssignment, assignments }: { month: string; setMonth: (month: string) => void; incomeEntries: IncomeEntry[]; setIncomeEntries: Dispatch<SetStateAction<IncomeEntry[]>>; readyToAssignYen: number; budgetRows: ReturnType<typeof buildBudgetRows>; fullBudgetRows: ReturnType<typeof buildBudgetRows>; budgetFilter: "all" | "overspent" | "underfunded" | "funded"; setBudgetFilter: (filter: "all" | "overspent" | "underfunded" | "funded") => void; categoryGroups: CategoryGroup[]; categoryList: Category[]; setCategories: Dispatch<SetStateAction<Category[]>>; transactions: Transaction[]; setTransactions: Dispatch<SetStateAction<Transaction[]>>; budgetNotice: string | null; estimatedAssignments: Record<string, boolean>; setAssignment: (categoryId: string, value: number, isManuallySet?: boolean) => void; assignments: BudgetAssignment[] }) {
   const filters = ["all", "overspent", "underfunded", "funded"] as const;
   const [incomeCollapsed, setIncomeCollapsed] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(() => {
@@ -375,9 +413,9 @@ function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToA
     setCategories((previous) => category.source === "custom" ? previous.filter((item) => item.id !== category.id) : previous.map((item) => item.id === category.id ? { ...item, isArchived: true } : item));
   };
 
-  const assignWithNisaCheck = (categoryId: string, value: number) => {
+  const assignWithNisaCheck = (categoryId: string, value: number, isManuallySet: boolean = true) => {
     if (categoryId !== "cat-nisa") {
-      setAssignment(categoryId, value);
+      setAssignment(categoryId, value, isManuallySet);
       return;
     }
     const year = Number(month.slice(0, 4));
@@ -386,12 +424,12 @@ function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToA
     const remaining = Math.max(0, Math.min(NISA_GROWTH_ANNUAL_LIMIT_YEN - growthUsed, NISA_COMBINED_ANNUAL_LIMIT_YEN - growthUsed - tsumitateUsed));
     if (value > remaining) {
       const overflow = value - remaining;
-      setAssignment("cat-nisa", remaining);
-      setAssignment("cat-taxable", (assignments.find((assignment) => assignment.categoryId === "cat-taxable")?.assignedYen ?? 0) + overflow);
+      setAssignment("cat-nisa", remaining, isManuallySet);
+      setAssignment("cat-taxable", (assignments.find((assignment) => assignment.categoryId === "cat-taxable")?.assignedYen ?? 0) + overflow, isManuallySet);
       setNisaWarning(`${formatJPY(overflow)} moved to Taxable account — NISA limit reached for this year.`);
       return;
     }
-    setAssignment(categoryId, value);
+    setAssignment(categoryId, value, isManuallySet);
     setNisaWarning(remaining - value <= 200_000 ? `NISA annual limit almost reached — ${formatJPY(Math.max(0, remaining - value))} remaining.` : null);
   };
 
@@ -405,9 +443,20 @@ function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToA
     setExpenseError(null);
   };
 
-  const readyTone = readyToAssignYen > 0 ? "green" : readyToAssignYen < 0 ? "red" : "amber";
-  const readyBg = readyTone === "green" ? "bg-[#E8F5EE]" : readyTone === "red" ? "bg-[#FBE5E3]" : "bg-[#FBEFD9]";
-  const readyText = readyTone === "green" ? "text-[#2F7A58]" : readyTone === "red" ? "text-[#A32D27]" : "text-[#8A5A10]";
+  // Negative ready-to-assign is a planning warning, not an error: use amber, not red (Fix 5d).
+  const readyTone: "green" | "amber" = readyToAssignYen > 0 ? "green" : "amber";
+  const readyBg = readyTone === "green" ? "bg-[#E8F5EE]" : "bg-[#FBEFD9]";
+  const readyText = readyTone === "green" ? "text-[#2F7A58]" : "text-[#8A5A10]";
+  const readyHeadline = readyToAssignYen > 0
+    ? `${formatJPY(readyToAssignYen)} available to assign`
+    : readyToAssignYen === 0
+      ? "All income assigned"
+      : `Over-assigned by ${formatJPY(Math.abs(readyToAssignYen))}`;
+  const readyDetail = readyToAssignYen > 0
+    ? "Money not yet allocated to any category"
+    : readyToAssignYen === 0
+      ? "Your budget is fully allocated"
+      : "Reduce some categories to balance";
 
   return (
     <div className="space-y-4">
@@ -417,11 +466,9 @@ function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToA
         <div className="flex items-center justify-between gap-4">
           <div>
             <p className={`text-[11px] font-medium uppercase tracking-[0.08em] ${readyText}`}>Ready to assign</p>
-            <p className={`mt-1 text-3xl font-medium tabular-nums ${readyText}`}>{formatJPY(readyToAssignYen)}</p>
+            <p className={`mt-1 text-3xl font-medium tabular-nums ${readyText}`}>{readyHeadline}</p>
           </div>
-          <p className={`max-w-xs text-right text-xs leading-relaxed ${readyText}/80`}>
-            {readyToAssignYen > 0 ? "Assign every yen to a category to give it a job." : readyToAssignYen < 0 ? "You've assigned more than you've earned this month." : "Every yen is assigned."}
-          </p>
+          <p className={`max-w-xs text-right text-xs leading-relaxed ${readyText}/80`}>{readyDetail}</p>
         </div>
       </div>
 
@@ -481,13 +528,24 @@ function BudgetPage({ month, setMonth, incomeEntries, setIncomeEntries, readyToA
         </div>
         <div className="overflow-hidden rounded-lg border border-[#F0EFEB]">
           <table className="w-full border-collapse text-sm">
-            <thead><tr className="bg-[#FAFAF8]">
-              <th className="px-4 py-2.5 text-left text-[10px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">Category</th>
-              <th className="px-4 py-2.5 text-right text-[10px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">Assigned</th>
-              <th className="px-4 py-2.5 text-right text-[10px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">Activity</th>
-              <th className="px-4 py-2.5 text-right text-[10px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">Available</th>
-            </tr></thead>
-            <tbody>{categoryGroups.map((group) => { const rows = budgetRows.filter((row) => row.category.groupId === group.id); if (rows.length === 0 && categoryList.every((category) => category.groupId !== group.id)) return null; return <BudgetGroup key={group.id} groupId={group.id} name={group.name} rows={rows} isCollapsed={collapsedGroups[group.id] ?? false} toggleCollapsed={() => persistCollapsedGroups({ ...collapsedGroups, [group.id]: !(collapsedGroups[group.id] ?? false) })} addCategory={() => addCategory(group.id)} deleteCategory={deleteCategory} setAssignment={assignWithNisaCheck} month={month} transactions={transactions} openActivityCategoryId={activityCategoryId} setOpenActivityCategoryId={setActivityCategoryId} expenseDraft={expenseDraft} setExpenseDraft={setExpenseDraft} logExpense={logExpense} expenseError={expenseError} estimatedAssignments={estimatedAssignments} />; })}</tbody>
+            <thead>
+              <tr className="bg-[#FAFAF8]">
+                <th className="px-4 py-2.5 text-left text-[10px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">Category</th>
+                <th className="px-4 py-2.5 text-right text-[10px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">Assigned</th>
+                <th className="px-4 py-2.5 text-right text-[10px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">Activity</th>
+                <th className="px-4 py-2.5 text-right text-[10px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">Available</th>
+              </tr>
+              <tr className="hidden border-b border-[#F0EFEB] bg-[#FAFAF8] sm:table-row">
+                <td colSpan={4} className="px-4 pb-1.5 pt-0 text-[11px] text-[#6B7280]">
+                  <span>Assigned = what you plan to spend</span>
+                  <span className="mx-2 text-[#C9C7C0]">·</span>
+                  <span>Activity = what you actually spent</span>
+                  <span className="mx-2 text-[#C9C7C0]">·</span>
+                  <span>Available = what&apos;s left</span>
+                </td>
+              </tr>
+            </thead>
+            <tbody>{categoryGroups.map((group) => { const rows = sortBudgetRowsByActivity(budgetRows.filter((row) => row.category.groupId === group.id)); if (rows.length === 0 && categoryList.every((category) => category.groupId !== group.id)) return null; return <BudgetGroup key={group.id} groupId={group.id} name={group.name} rows={rows} isCollapsed={collapsedGroups[group.id] ?? false} toggleCollapsed={() => persistCollapsedGroups({ ...collapsedGroups, [group.id]: !(collapsedGroups[group.id] ?? false) })} addCategory={() => addCategory(group.id)} deleteCategory={deleteCategory} setAssignment={assignWithNisaCheck} month={month} transactions={transactions} openActivityCategoryId={activityCategoryId} setOpenActivityCategoryId={setActivityCategoryId} expenseDraft={expenseDraft} setExpenseDraft={setExpenseDraft} logExpense={logExpense} expenseError={expenseError} estimatedAssignments={estimatedAssignments} />; })}</tbody>
           </table>
         </div>
       </Card>
@@ -597,6 +655,8 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
         <Stat label="Uncategorized" value={`${stats.uncategorized}`} tone={stats.uncategorized > 0 ? "warning" : undefined} />
       </div>
 
+      <TransactionCategoryDonut transactions={monthTransactions} categories={categories} />
+
       <Card title="Filter transactions" eyebrow="Monthly review">
         <div className="grid gap-3 xl:grid-cols-[1.2fr_1fr_1fr_0.8fr_0.8fr]">
           <TextInput label="Search merchant or memo" value={filters.search} onChange={(value) => setFilters((previous) => ({ ...previous, search: value }))} />
@@ -694,6 +754,107 @@ function TransactionsPage({ month, setMonth, transactions, rawTransactions, setT
   );
 }
 
+function TransactionCategoryDonut({ transactions, categories }: { transactions: Transaction[]; categories: Category[] }) {
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem("fire-save-tx-donut-collapsed") === "1";
+  });
+  const togglePanel = () => {
+    setCollapsed((previous) => {
+      const next = !previous;
+      if (typeof window !== "undefined") localStorage.setItem("fire-save-tx-donut-collapsed", next ? "1" : "0");
+      return next;
+    });
+  };
+  const data = useMemo(() => {
+    const totals = new Map<string, number>();
+    transactions.forEach((transaction) => {
+      if (transaction.type !== "debit") return;
+      const key = transaction.categoryId ?? "uncategorized";
+      totals.set(key, (totals.get(key) ?? 0) + transaction.amountYen);
+    });
+    const rows = Array.from(totals.entries()).map(([categoryId, amount]) => {
+      const category = categories.find((item) => item.id === categoryId);
+      const name = category ? getCategoryDisplayName(category.name) : "Uncategorized";
+      const sourceName = category?.name ?? "uncategorized";
+      return {
+        categoryId,
+        name,
+        value: amount,
+        color: getCategoryColor(sourceName),
+      };
+    });
+    return filterLegendItems(sortChartDataDescending(rows));
+  }, [transactions, categories]);
+  const total = data.reduce((sum, item) => sum + item.value, 0);
+
+  return (
+    <Card
+      title="Spending by category"
+      eyebrow="This month"
+      action={
+        <button type="button" onClick={togglePanel} aria-label={collapsed ? "Expand" : "Collapse"} className="rounded-md p-1.5 text-[#6B7280] hover:bg-[#F5F4F0] hover:text-slate-900">
+          <ChevronDown className={`h-4 w-4 transition ${collapsed ? "-rotate-90" : ""}`} />
+        </button>
+      }
+    >
+      <AnimatePresence initial={false}>
+        {!collapsed && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2, ease: "easeOut" }} className="overflow-hidden">
+            {data.length === 0 ? (
+              <EmptyHint>No debit transactions this month yet.</EmptyHint>
+            ) : (
+              <div className="grid items-center gap-4 lg:grid-cols-[260px_1fr]">
+                <div className="relative h-[220px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={data} dataKey="value" nameKey="name" innerRadius={55} outerRadius={90} stroke="none">
+                        {data.map((entry) => (
+                          <Cell key={entry.categoryId} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        formatter={(value, name) => {
+                          const numeric = Number(value ?? 0);
+                          if (Math.abs(numeric) < CHART_MIN_VALUE) return ["", ""];
+                          const pct = total > 0 ? formatPercent(numeric / total) : "";
+                          return [`${formatJPY(numeric)} · ${pct}`, name];
+                        }}
+                        contentStyle={{ backgroundColor: "white", border: "1px solid #F0EFEB", borderRadius: 8, fontSize: 12 }}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                    <span className="text-xl font-medium tabular-nums text-slate-900">{formatJPY(total)}</span>
+                    <span className="mt-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">Total spent</span>
+                  </div>
+                </div>
+                <ul className="grid gap-1 md:grid-cols-2">
+                  {data.map((item) => {
+                    const pct = total > 0 ? item.value / total : 0;
+                    return (
+                      <li key={item.categoryId} className="flex items-center justify-between gap-3 rounded-md px-2 py-1 text-sm">
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ backgroundColor: item.color }} />
+                          <span className="truncate text-slate-900">{item.name}</span>
+                        </span>
+                        <span className="shrink-0 tabular-nums text-[#6B7280]">
+                          {formatJPY(item.value)}
+                          <span className="ml-1 text-[#6B7280]/70">· {formatPercent(pct)}</span>
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </Card>
+  );
+}
+
 function Stat({ label, value, tone }: { label: string; value: string; tone?: "success" | "danger" | "warning" }) {
   const color = tone === "success" ? "text-[#2F7A58]" : tone === "danger" ? "text-[#E5534B]" : tone === "warning" ? "text-[#8A5A10]" : "text-slate-900";
   return (
@@ -734,6 +895,33 @@ const emptyDebtDraft: CreditDebt = {
 function ordinalDay(day: number): string {
   const suffix = day % 10 === 1 && day % 100 !== 11 ? "st" : day % 10 === 2 && day % 100 !== 12 ? "nd" : day % 10 === 3 && day % 100 !== 13 ? "rd" : "th";
   return `${day}${suffix}`;
+}
+
+function getBillingCycle(paymentDueDay: number, today: Date = new Date()): { start: Date; end: Date; due: Date } {
+  // JP credit card model: charges accumulate during a closing month then debit on a fixed day next
+  // month. We approximate the closing window as the 30 days ending ~16 days before the due date.
+  const day = paymentDueDay > 0 ? paymentDueDay : 27;
+  const due = new Date(today.getFullYear(), today.getMonth(), day);
+  if (due.getTime() < today.getTime()) due.setMonth(due.getMonth() + 1);
+  const end = new Date(due);
+  end.setDate(end.getDate() - 16);
+  const start = new Date(end);
+  start.setDate(start.getDate() - 29);
+  return { start, end, due };
+}
+
+function formatBillingRange(start: Date, end: Date): string {
+  const fmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
+  return `${fmt.format(start)} – ${fmt.format(end)}`;
+}
+
+function formatDueDate(due: Date, today: Date = new Date()): string {
+  const ms = due.getTime() - today.getTime();
+  const days = Math.ceil(ms / 86_400_000);
+  const fmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
+  if (days <= 0) return `Due ${fmt.format(due)}`;
+  if (days <= 14) return `Clears in ${days} day${days === 1 ? "" : "s"}`;
+  return `Due ${fmt.format(due)}`;
 }
 
 function isDebtDueSoon(debt: CreditDebt): boolean {
@@ -863,9 +1051,22 @@ function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOuts
             const monthlyInterestRate = normalizeInterestRate(debt.monthlyInterestRate ?? debt.annualInterestRate / 12);
             const railColor = debt.type === "lump_sum" ? "bg-[#F5A623]" : "bg-[#E5534B]";
             const paidPct = debt.type === "installment" && debt.totalInstallments ? Math.min(100, Math.round(((debt.installmentsPaid ?? 0) / debt.totalInstallments) * 100)) : null;
+            const isRevolving = debt.type === "revolving";
+            const today = new Date();
+            const cycle = isRevolving ? getBillingCycle(debt.paymentDueDay ?? 27, today) : null;
+            const cycleStartIso = cycle ? cycle.start.toISOString().slice(0, 10) : null;
+            const cycleEndIso = cycle ? cycle.end.toISOString().slice(0, 10) : null;
+            const cycleCharges = isRevolving && debt.accountId && cycleStartIso && cycleEndIso
+              ? transactions
+                  .filter((transaction) => transaction.accountId === debt.accountId)
+                  .filter((transaction) => transaction.type === "debit")
+                  .filter((transaction) => transaction.source !== "recurring")
+                  .filter((transaction) => transaction.date >= cycleStartIso && transaction.date <= cycleEndIso)
+              : [];
+            const cycleTotal = cycleCharges.reduce((total, transaction) => total + transaction.amountYen, 0);
+            const topCharges = [...cycleCharges].sort((a, b) => b.amountYen - a.amountYen).slice(0, 4);
             return (
-              <div key={debt.id} className="relative overflow-hidden rounded-2xl bg-white p-5 pl-6 shadow-[0_1px_2px_rgba(17,24,39,0.04)]">
-                <span className={`absolute left-0 top-0 bottom-0 w-1 ${railColor}`} />
+              <div key={debt.id} className="relative overflow-hidden rounded-2xl bg-white p-5 shadow-[0_1px_2px_rgba(17,24,39,0.04)]">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <DebtTypeBadge type={debt.type} />
@@ -878,25 +1079,61 @@ function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOuts
                     <button type="button" onClick={() => requestDeleteDebt(debt)} aria-label={`Delete ${getAccountDisplayNames(debt.cardName).primary}`} className="rounded-md p-1.5 text-[#6B7280] hover:bg-[#FBE5E3] hover:text-[#E5534B]"><Trash2 className="h-3.5 w-3.5" /></button>
                   </div>
                 </div>
-                <div className="mt-4">
-                  <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">Outstanding balance</p>
-                  <p className={`mt-1 text-3xl font-medium tabular-nums ${debt.currentBalanceYen > 100_000 ? "text-[#E5534B]" : "text-slate-900"}`}>{formatJPY(debt.currentBalanceYen)}</p>
+
+                {/* Section A — Revolving balance / Installment / Lump sum primary view */}
+                <div className={`mt-4 ${isRevolving ? "border-l-[3px] border-[#E5534B] pl-3" : `relative pl-3`}`}>
+                  {!isRevolving && <span className={`absolute left-0 top-0 bottom-0 w-[3px] rounded-full ${railColor}`} />}
+                  <div className="flex items-baseline justify-between gap-2">
+                    <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">
+                      {isRevolving ? "Revolving balance" : "Outstanding balance"}
+                    </p>
+                    {isRevolving && <span className="text-[10px] text-[#9CA3AF]">リボ払い</span>}
+                  </div>
+                  <p className={`mt-1 text-3xl font-medium tabular-nums ${isRevolving || debt.currentBalanceYen > 100_000 ? "text-[#E5534B]" : "text-slate-900"}`}>{formatJPY(debt.currentBalanceYen)}</p>
+                  {paidPct !== null && (
+                    <div className="mt-3">
+                      <ProgressBar value={paidPct} tone="success" />
+                      <p className="mt-1 text-[11px] tabular-nums text-[#6B7280]">{paidPct}% paid off</p>
+                    </div>
+                  )}
+                  <div className="mt-3 grid gap-1 text-xs leading-relaxed text-[#6B7280]">
+                    <div className="flex justify-between"><span>Monthly payment</span><span className="tabular-nums text-slate-900">{formatJPY(debt.monthlyPaymentYen)}</span></div>
+                    <div className="flex justify-between"><span>Monthly interest</span><span className="tabular-nums">{formatPercent(monthlyInterestRate, 2)}</span></div>
+                    <div className="flex justify-between"><span>Due day</span><span className="tabular-nums">{debt.paymentDueDay ? ordinalDay(debt.paymentDueDay) : "—"}</span></div>
+                    <div className="flex justify-between"><span>Category</span><span className="truncate text-slate-700">{category ? getCategoryDisplayName(category.name) : "Unlinked"}</span></div>
+                    {ribo && <div className="flex justify-between"><span>Payoff</span><span className="tabular-nums">{ribo.monthsToPayoff} mo · {formatJPY(ribo.totalInterestYen)} interest</span></div>}
+                    {bunkatsu && <div className="flex justify-between"><span>Remaining</span><span className="tabular-nums">{bunkatsu.remainingInstallments} installments · {formatJPY(bunkatsu.remainingBalanceYen)}</span></div>}
+                    {debt.type === "lump_sum" && <div className="flex justify-between"><span>Expected billing</span><span className="tabular-nums">{debt.expectedBillingDate ?? "Not set"}</span></div>}
+                  </div>
                 </div>
-                {paidPct !== null && (
-                  <div className="mt-3">
-                    <ProgressBar value={paidPct} tone="success" />
-                    <p className="mt-1 text-[11px] tabular-nums text-[#6B7280]">{paidPct}% paid off</p>
+
+                {/* Section B — This billing cycle (only for revolving cards) */}
+                {isRevolving && cycle && (
+                  <div className="mt-4 border-t border-[#F0EFEB] pt-4">
+                    <div className="border-l-[3px] border-[#4A7CFF] pl-3">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-[#6B7280]">This billing cycle</p>
+                        <span className="text-[10px] text-[#9CA3AF]">{formatBillingRange(cycle.start, cycle.end)}</span>
+                      </div>
+                      {cycleCharges.length === 0 ? (
+                        <p className="mt-2 text-xs text-[#6B7280]">No new charges this cycle.</p>
+                      ) : (
+                        <>
+                          <p className="mt-1 text-2xl font-medium tabular-nums text-slate-900">{formatJPY(cycleTotal)}</p>
+                          <p className="mt-0.5 text-[11px] text-[#6B7280]">{formatDueDate(cycle.due, today)}</p>
+                          <ul className="mt-2 space-y-1 text-xs text-[#6B7280]">
+                            {topCharges.map((charge) => (
+                              <li key={charge.id} className="flex justify-between gap-3">
+                                <span className="min-w-0 truncate">{charge.payee}</span>
+                                <span className="shrink-0 tabular-nums">{formatJPY(charge.amountYen)}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </>
+                      )}
+                    </div>
                   </div>
                 )}
-                <div className="mt-4 grid gap-1 border-t border-[#F0EFEB] pt-3 text-xs leading-relaxed text-[#6B7280]">
-                  <div className="flex justify-between"><span>Monthly payment</span><span className="tabular-nums text-slate-900">{formatJPY(debt.monthlyPaymentYen)}</span></div>
-                  <div className="flex justify-between"><span>Monthly interest</span><span className="tabular-nums">{formatPercent(monthlyInterestRate, 2)}</span></div>
-                  <div className="flex justify-between"><span>Due day</span><span className="tabular-nums">{debt.paymentDueDay ? ordinalDay(debt.paymentDueDay) : "—"}</span></div>
-                  <div className="flex justify-between"><span>Category</span><span className="truncate text-slate-700">{category ? getCategoryDisplayName(category.name) : "Unlinked"}</span></div>
-                  {ribo && <div className="flex justify-between"><span>Payoff</span><span className="tabular-nums">{ribo.monthsToPayoff} mo · {formatJPY(ribo.totalInterestYen)} interest</span></div>}
-                  {bunkatsu && <div className="flex justify-between"><span>Remaining</span><span className="tabular-nums">{bunkatsu.remainingInstallments} installments · {formatJPY(bunkatsu.remainingBalanceYen)}</span></div>}
-                  {debt.type === "lump_sum" && <div className="flex justify-between"><span>Expected billing</span><span className="tabular-nums">{debt.expectedBillingDate ?? "Not set"}</span></div>}
-                </div>
               </div>
             );
           })}
@@ -1251,8 +1488,6 @@ function ReportsPage({ selectedMonth, transactions, incomeEntries, categories, a
   const months = Array.from({ length: 6 }, (_, index) => shiftMonth(selectedMonth, index - 5));
   const availableDataMonths = new Set([...transactions.map((transaction) => transaction.date.slice(0, 7)), ...incomeEntries.map((entry) => entry.month)]);
   const hasEnoughData = months.filter((month) => availableDataMonths.has(month)).length >= 2;
-  // Muted categorical palette (not status colors — green/amber/red are reserved for meaning).
-  const palette = ["#5A7FBF", "#7A9FE5", "#BFA770", "#C9A088", "#9B7EB5", "#8BA39B", "#B29B85", "#7D8697"];
   const cashFlowData = months.map((month) => {
     const income = incomeEntries.filter((entry) => entry.month === month).reduce((total, entry) => total + entry.amountYen, 0);
     const spending = transactions.filter((transaction) => transaction.type === "debit" && transaction.date.startsWith(month)).reduce((total, transaction) => total + transaction.amountYen, 0);
@@ -1265,10 +1500,11 @@ function ReportsPage({ selectedMonth, transactions, incomeEntries, categories, a
     });
     return row;
   });
-  const currentMonthSpending = categories.map((category, index) => {
+  const currentMonthSpendingRaw = categories.map((category) => {
     const amount = Number(categoryData.at(-1)?.[category.id] ?? 0);
-    return { category, amount, color: palette[index % palette.length] };
-  }).filter((item) => item.amount > 0);
+    return { category, amount, value: amount, color: getCategoryColor(category.name) };
+  });
+  const currentMonthSpending = filterLegendItems(sortChartDataDescending(currentMonthSpendingRaw));
   const currentMonthTotal = currentMonthSpending.reduce((total, item) => total + item.amount, 0);
   const savingsTotal = accounts.filter((account) => account.type !== "credit").reduce((total, account) => total + account.balanceYen, 0);
   const investmentTotal = investments.reduce((total, investment) => total + investment.currentBalanceYen, 0);
@@ -1283,7 +1519,7 @@ function ReportsPage({ selectedMonth, transactions, incomeEntries, categories, a
             <CartesianGrid strokeDasharray="3 3" stroke="#F0EFEB" vertical={false} />
             <XAxis dataKey="month" tick={{ fill: "#6B7280", fontSize: 11 }} />
             <YAxis tickFormatter={compactCurrency} width={56} tick={{ fill: "#6B7280", fontSize: 11 }} />
-            <Tooltip formatter={(value) => formatJPY(Number(value))} contentStyle={{ backgroundColor: "white", border: "1px solid #F0EFEB", borderRadius: 8, fontSize: 12 }} />
+            <Tooltip formatter={(value) => Math.abs(Number(value)) >= CHART_MIN_VALUE ? formatJPY(Number(value)) : ""} contentStyle={{ backgroundColor: "white", border: "1px solid #F0EFEB", borderRadius: 8, fontSize: 12 }} />
             <Bar dataKey="income" name="Income" fill="#7A9FE5" radius={[2, 2, 0, 0]} />
             <Bar dataKey="spending" name="Spending" fill="#D98A86" radius={[2, 2, 0, 0]} />
             <Line type="monotone" dataKey="net" name="Net savings" stroke="#4A7CFF" strokeWidth={2} dot={{ r: 3, fill: "#4A7CFF" }} />
@@ -1296,8 +1532,8 @@ function ReportsPage({ selectedMonth, transactions, incomeEntries, categories, a
             <CartesianGrid strokeDasharray="3 3" stroke="#F0EFEB" horizontal={false} />
             <XAxis type="number" tickFormatter={compactCurrency} tick={{ fill: "#6B7280", fontSize: 11 }} />
             <YAxis dataKey="month" type="category" width={76} tick={{ fill: "#6B7280", fontSize: 11 }} />
-            <Tooltip formatter={(value, name) => { const c = categories.find((category) => category.id === name); return [formatJPY(Number(value)), c ? getCategoryDisplayName(c.name) : name]; }} contentStyle={{ backgroundColor: "white", border: "1px solid #F0EFEB", borderRadius: 8, fontSize: 12 }} />
-            {categories.map((category, index) => <Bar key={category.id} dataKey={category.id} stackId="spend" fill={palette[index % palette.length]} />)}
+            <Tooltip formatter={(value, name) => { if (Math.abs(Number(value)) < CHART_MIN_VALUE) return ["", ""]; const c = categories.find((category) => category.id === name); return [formatJPY(Number(value)), c ? getCategoryDisplayName(c.name) : name]; }} contentStyle={{ backgroundColor: "white", border: "1px solid #F0EFEB", borderRadius: 8, fontSize: 12 }} />
+            {categories.map((category) => <Bar key={category.id} dataKey={category.id} stackId="spend" fill={getCategoryColor(category.name)} />)}
           </BarChart>
         </ResponsiveContainer>
       </ChartReportCard>
@@ -1322,7 +1558,7 @@ function ReportsPage({ selectedMonth, transactions, incomeEntries, categories, a
             <CartesianGrid strokeDasharray="3 3" stroke="#F0EFEB" vertical={false} />
             <XAxis dataKey="month" tick={{ fill: "#6B7280", fontSize: 11 }} />
             <YAxis tickFormatter={compactCurrency} width={56} tick={{ fill: "#6B7280", fontSize: 11 }} />
-            <Tooltip formatter={(value) => formatJPY(Number(value))} contentStyle={{ backgroundColor: "white", border: "1px solid #F0EFEB", borderRadius: 8, fontSize: 12 }} />
+            <Tooltip formatter={(value) => Math.abs(Number(value)) >= CHART_MIN_VALUE ? formatJPY(Number(value)) : ""} contentStyle={{ backgroundColor: "white", border: "1px solid #F0EFEB", borderRadius: 8, fontSize: 12 }} />
             <ReferenceLine y={0} stroke="#C9C7C0" />
             <Area type="monotone" dataKey="savings" name="Savings" stackId="assets" stroke="none" fill="#7A9FE5" fillOpacity={0.5} />
             <Area type="monotone" dataKey="investments" name="Investments" stackId="assets" stroke="none" fill="#4A7CFF" fillOpacity={0.6} />
@@ -1416,23 +1652,33 @@ function MonthNavigator({ month, onPrevious, onNext }: { month: string; onPrevio
   );
 }
 
-function BudgetGroup({ name, rows, isCollapsed, toggleCollapsed, addCategory, deleteCategory, setAssignment, month, transactions, openActivityCategoryId, setOpenActivityCategoryId, expenseDraft, setExpenseDraft, logExpense, expenseError, estimatedAssignments }: { groupId: string; name: string; rows: ReturnType<typeof buildBudgetRows>; isCollapsed: boolean; toggleCollapsed: () => void; addCategory: () => void; deleteCategory: (category: Category) => void; setAssignment: (categoryId: string, value: number) => void; month: string; transactions: Transaction[]; openActivityCategoryId: string | null; setOpenActivityCategoryId: (categoryId: string | null) => void; expenseDraft: { payee: string; amountYen: number }; setExpenseDraft: (draft: { payee: string; amountYen: number }) => void; logExpense: (categoryId: string) => void; expenseError: string | null; estimatedAssignments: Record<string, boolean> }) {
+function BudgetGroup({ name, rows, isCollapsed, toggleCollapsed, addCategory, deleteCategory, setAssignment, month, transactions, openActivityCategoryId, setOpenActivityCategoryId, expenseDraft, setExpenseDraft, logExpense, expenseError, estimatedAssignments }: { groupId: string; name: string; rows: ReturnType<typeof buildBudgetRows>; isCollapsed: boolean; toggleCollapsed: () => void; addCategory: () => void; deleteCategory: (category: Category) => void; setAssignment: (categoryId: string, value: number, isManuallySet?: boolean) => void; month: string; transactions: Transaction[]; openActivityCategoryId: string | null; setOpenActivityCategoryId: (categoryId: string | null) => void; expenseDraft: { payee: string; amountYen: number }; setExpenseDraft: (draft: { payee: string; amountYen: number }) => void; logExpense: (categoryId: string) => void; expenseError: string | null; estimatedAssignments: Record<string, boolean> }) {
   const groupAssigned = rows.reduce((total, row) => total + row.assignedYen, 0);
   const groupActivity = rows.reduce((total, row) => total + row.activityYen, 0);
   const groupAvailable = rows.reduce((total, row) => total + row.availableYen, 0);
+  const overspentCount = rows.filter((row) => row.status === "overspent").length;
+  const overAssigned = Math.max(0, groupActivity - groupAssigned);
+  const summary = overspentCount > 0
+    ? `${overspentCount} ${overspentCount === 1 ? "category" : "categories"} over budget`
+    : overAssigned > 0
+      ? `${formatJPY(overAssigned)} over assigned amount`
+      : "All categories on track";
   return (
     <>
       <tr onClick={toggleCollapsed} className="cursor-pointer border-t border-[#F0EFEB] bg-[#EEEDE9] hover:bg-[#E8E7E3]">
         <td className="relative py-2.5 pl-4 pr-4">
           <span className="absolute left-0 top-1 bottom-1 w-[3px] rounded-full bg-[#4A7CFF]" />
-          <span className="inline-flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.08em] text-slate-800">
-            <ChevronDown className={`h-3.5 w-3.5 text-[#6B7280] transition ${isCollapsed ? "-rotate-90" : ""}`} />
-            {name}
-          </span>
+          <div>
+            <span className="inline-flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.08em] text-slate-800">
+              <ChevronDown className={`h-3.5 w-3.5 text-[#6B7280] transition ${isCollapsed ? "-rotate-90" : ""}`} />
+              {name}
+            </span>
+            <p className="ml-5 mt-0.5 text-[11px] normal-case tracking-normal text-[#6B7280]">{summary}</p>
+          </div>
         </td>
-        <td className="py-2.5 pr-4 text-right text-[11px] tabular-nums text-[#6B7280]">{formatJPY(groupAssigned)}</td>
-        <td className="py-2.5 pr-4 text-right text-[11px] tabular-nums text-[#6B7280]">{formatJPY(groupActivity)}</td>
-        <td className="py-2.5 pr-4 text-right">
+        <td className="py-2.5 pr-4 text-right align-top text-[11px] tabular-nums text-[#6B7280]">{formatJPY(groupAssigned)}</td>
+        <td className="py-2.5 pr-4 text-right align-top text-[11px] tabular-nums text-[#6B7280]">{formatJPY(groupActivity)}</td>
+        <td className="py-2.5 pr-4 text-right align-top">
           <div className="inline-flex items-center gap-2">
             <span className="text-[11px] tabular-nums text-[#6B7280]">{formatJPY(groupAvailable)}</span>
             <button type="button" onClick={(event) => { event.stopPropagation(); addCategory(); }} className="rounded-md px-1.5 py-0.5 text-[11px] font-medium text-[#6B7280] transition hover:bg-white hover:text-slate-900" title="Add category">
@@ -1462,7 +1708,11 @@ function BudgetGroup({ name, rows, isCollapsed, toggleCollapsed, addCategory, de
                 </div>
               </td>
               <td className="py-2 pr-4 text-right">
-                <InlineAssignedInput value={row.assignedYen} onChange={(value) => setAssignment(row.category.id, value)} />
+                <InlineAssignedInput
+                  value={row.assignedYen}
+                  isManuallySet={row.isManuallySet}
+                  onCommit={(value, manual) => setAssignment(row.category.id, value, manual)}
+                />
               </td>
               <td className="relative py-2 pr-4 text-right tabular-nums">
                 <button type="button" onClick={() => setOpenActivityCategoryId(isActivityOpen ? null : row.category.id)} className="rounded px-2 py-1 text-sm text-[#6B7280] transition hover:bg-[#EEEDE9] hover:text-slate-900">
@@ -1509,33 +1759,64 @@ function BudgetGroup({ name, rows, isCollapsed, toggleCollapsed, addCategory, de
   );
 }
 
-function InlineAssignedInput({ value, onChange }: { value: number; onChange: (value: number) => void }) {
-  const [local, setLocal] = useState<string | null>(null);
+function InlineAssignedInput({ value, isManuallySet, onCommit }: { value: number; isManuallySet: boolean; onCommit: (value: number, isManuallySet: boolean) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [local, setLocal] = useState<string>("");
   const [flash, setFlash] = useState(false);
-  const displayed = local ?? String(value);
-  const commit = () => {
-    const raw = local ?? String(value);
-    const parsed = Number(raw.replace(/[^\d-]/g, "")) || 0;
-    if (parsed !== value) {
-      onChange(parsed);
-      setFlash(true);
-      window.setTimeout(() => setFlash(false), 180);
-    }
-    setLocal(null);
+
+  const startEditing = () => {
+    setLocal(String(value));
+    setEditing(true);
   };
+
+  const commit = () => {
+    const trimmed = local.trim();
+    if (trimmed === "") {
+      // Empty means "let it auto-calculate" — clear manual flag and reset to 0; the auto-assign
+      // effect will repopulate the value to match activity on the next render.
+      if (isManuallySet) onCommit(0, false);
+    } else {
+      const parsed = Number(trimmed.replace(/[^\d-]/g, "")) || 0;
+      if (parsed !== value || !isManuallySet) {
+        onCommit(parsed, true);
+        setFlash(true);
+        window.setTimeout(() => setFlash(false), 180);
+      }
+    }
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <motion.input
+        autoFocus
+        type="text"
+        inputMode="numeric"
+        value={local}
+        onChange={(event) => setLocal(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => { if (event.key === "Enter") (event.target as HTMLInputElement).blur(); if (event.key === "Escape") setEditing(false); }}
+        animate={flash ? { scale: [1, 1.04, 1] } : { scale: 1 }}
+        transition={{ duration: 0.18 }}
+        className="hide-spin w-28 rounded bg-white px-1.5 py-1 text-right text-sm tabular-nums text-slate-900 outline-none ring-2 ring-[#4A7CFF]/30"
+      />
+    );
+  }
+
   return (
-    <motion.input
-      type="text"
-      inputMode="numeric"
-      value={displayed}
-      onFocus={() => setLocal(String(value))}
-      onChange={(event) => setLocal(event.target.value)}
-      onBlur={commit}
-      onKeyDown={(event) => { if (event.key === "Enter") (event.target as HTMLInputElement).blur(); }}
+    <motion.button
+      type="button"
+      onClick={startEditing}
       animate={flash ? { scale: [1, 1.04, 1] } : { scale: 1 }}
       transition={{ duration: 0.18 }}
-      className="hide-spin w-24 rounded border-b border-transparent bg-transparent px-1 py-1 text-right text-sm tabular-nums text-slate-900 outline-none transition focus:border-[#4A7CFF] focus:bg-white"
-    />
+      className="group inline-flex items-center justify-end gap-1.5 rounded border-b border-dashed border-[#9CA3AF]/40 px-1.5 py-1 text-right text-sm tabular-nums text-slate-900 transition hover:border-solid hover:border-[#6B7280] hover:bg-[#F0EFF0]"
+    >
+      <span>{formatJPY(value)}</span>
+      {!isManuallySet && value > 0 && (
+        <span className="text-[10px] font-medium uppercase tracking-[0.06em] text-[#9CA3AF]">auto</span>
+      )}
+      <Pencil className="h-3 w-3 text-[#9CA3AF] opacity-0 transition group-hover:opacity-100" />
+    </motion.button>
   );
 }
 

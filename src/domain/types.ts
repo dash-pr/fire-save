@@ -46,6 +46,7 @@ export type BudgetAssignment = {
   categoryId: string;
   month: string;
   assignedYen: Yen;
+  isManuallySet?: boolean;
 };
 
 export type MonthlyIncome = {
@@ -69,6 +70,7 @@ export type BudgetRow = {
   activityYen: Yen;
   availableYen: Yen;
   status: BudgetStatus;
+  isManuallySet: boolean;
 };
 
 export type CreditDebt = {
