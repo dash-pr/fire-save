@@ -17,7 +17,9 @@ const CARD_PAYMENT_PATTERNS: Array<{ pattern: RegExp; cardKey: string }> = [
   { pattern: /paidy/i,                                            cardKey: "Paidy" },
   { pattern: /jcb/i,                                              cardKey: "JCB" },
   { pattern: /セゾン|saison|amex|アメックス/i,                   cardKey: "セゾン" },
-  { pattern: /メルカリ|mercari|メルペイ/i,                       cardKey: "メルカリ" },
+  // メルペイ on a Sony Bank debit row is a wallet top-up that funds the Mercari Card; treat as
+  // a Mercari Card settlement so the Card Payments view sees the real money outflow.
+  { pattern: /メルカリ|mercari|メルペイ|merpay/i,                cardKey: "メルカリ" },
   // Cover both kanji and katakana spellings of Rakuten — MoneyForward exports use katakana.
   { pattern: /楽天|ラクテン/i,                                    cardKey: "楽天" },
   { pattern: /ミツイスミトモ|smbc|三井住友/i,                    cardKey: "三井住友" },

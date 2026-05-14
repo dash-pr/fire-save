@@ -19,11 +19,14 @@ import { prisma } from "../lib/importHelpers";
 const LOCAL_USER_ID = "local-user";
 const CSV_PATH = path.resolve(__dirname, "..", "収入・支出詳細_2026.csv");
 const YUCHO_PATTERN = /yucho|ゆうちょ|japan post/i;
+const SONY_PATTERN = /sony|ソニー/i;
 
-function parseCsv(csv: string): Array<{ date: string; payee: string; amountYen: number; mfId: string }> {
+type SettlementRow = { date: string; payee: string; amountYen: number; mfId: string; sourceAccount: "yucho" | "sony" };
+
+function parseCsv(csv: string): SettlementRow[] {
   const lines = csv.replace(/^﻿/, "").split(/\r?\n/);
   if (lines.length < 2) return [];
-  const out: Array<{ date: string; payee: string; amountYen: number; mfId: string }> = [];
+  const out: SettlementRow[] = [];
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i];
     if (!line.trim()) continue;
@@ -34,11 +37,24 @@ function parseCsv(csv: string): Array<{ date: string; payee: string; amountYen: 
     const amount = Number(cols[3]);
     const account = cols[4];
     const mfId = cols[9];
-    if (!payee.startsWith("自払")) continue;
-    if (account !== "Yucho") continue;
     if (!Number.isFinite(amount) || amount === 0) continue;
+    if (amount > 0) continue; // settlements are debits
+
+    const isYuchoSettlement = account === "Yucho" && payee.startsWith("自払");
+    // Sony Bank → メルペイ transfers fund the Mercari Card. They show as a bank debit with
+    // payee "メルペイ" on Sony Bank in MoneyForward; the upstream import dropped them as
+    // 振替 internal transfers, but they're the only real-money signal we have for Mercari.
+    const isSonyMerpay = account === "ソニー銀行" && payee.trim() === "メルペイ";
+
+    if (!isYuchoSettlement && !isSonyMerpay) continue;
     const date = dateRaw.replace(/\//g, "-");
-    out.push({ date, payee, amountYen: Math.abs(amount), mfId });
+    out.push({
+      date,
+      payee,
+      amountYen: Math.abs(amount),
+      mfId,
+      sourceAccount: isYuchoSettlement ? "yucho" : "sony",
+    });
   }
   return out;
 }
@@ -46,9 +62,11 @@ function parseCsv(csv: string): Array<{ date: string; payee: string; amountYen: 
 async function main() {
   const csv = readFileSync(CSV_PATH, "utf8");
   const rows = parseCsv(csv);
-  console.log(`Parsed ${rows.length} 自払 rows from CSV.`);
+  console.log(`Parsed ${rows.length} settlement rows from CSV.`);
 
-  const yucho = (await prisma.account.findMany({ where: { localUserId: LOCAL_USER_ID } })).find((a) => YUCHO_PATTERN.test(a.name));
+  const accounts = await prisma.account.findMany({ where: { localUserId: LOCAL_USER_ID } });
+  const yucho = accounts.find((a) => YUCHO_PATTERN.test(a.name));
+  const sony = accounts.find((a) => SONY_PATTERN.test(a.name));
   if (!yucho) throw new Error("Yucho account not found.");
 
   const otherCategory = await prisma.category.findFirst({
@@ -56,10 +74,14 @@ async function main() {
   });
 
   const existing = await prisma.transaction.findMany({
-    where: { localUserId: LOCAL_USER_ID, accountId: yucho.id, payee: { startsWith: "自払" } },
-    select: { date: true, amountYen: true, payee: true, memo: true },
+    where: {
+      localUserId: LOCAL_USER_ID,
+      accountId: { in: [yucho.id, ...(sony ? [sony.id] : [])] },
+      OR: [{ payee: { startsWith: "自払" } }, { payee: "メルペイ" }],
+    },
+    select: { date: true, amountYen: true, payee: true, memo: true, accountId: true },
   });
-  const existingKeys = new Set(existing.map((t) => `${t.date.toISOString().slice(0, 10)}|${t.amountYen}|${t.payee}`));
+  const existingKeys = new Set(existing.map((t) => `${t.accountId}|${t.date.toISOString().slice(0, 10)}|${t.amountYen}|${t.payee}`));
   const existingMfIds = new Set(existing.flatMap((t) => {
     const match = t.memo?.match(/MoneyForward ID: ([^|\s]+)/);
     return match ? [match[1].trim()] : [];
@@ -68,7 +90,12 @@ async function main() {
   let created = 0;
   let skipped = 0;
   for (const row of rows) {
-    const key = `${row.date}|${row.amountYen}|${row.payee}`;
+    const accountId = row.sourceAccount === "yucho" ? yucho.id : sony?.id;
+    if (!accountId) {
+      console.warn(`  ⚠ skipping ${row.date} ${row.payee}: ${row.sourceAccount} account missing`);
+      continue;
+    }
+    const key = `${accountId}|${row.date}|${row.amountYen}|${row.payee}`;
     if (existingKeys.has(key) || (row.mfId && existingMfIds.has(row.mfId))) {
       skipped += 1;
       continue;
@@ -77,7 +104,7 @@ async function main() {
       await prisma.transaction.create({
         data: {
           localUserId: LOCAL_USER_ID,
-          accountId: yucho.id,
+          accountId,
           categoryId: otherCategory?.id ?? null,
           date: new Date(`${row.date}T00:00:00.000Z`),
           payee: row.payee,
@@ -88,7 +115,7 @@ async function main() {
         },
       });
       created += 1;
-      console.log(`  + ${row.date}\t¥${row.amountYen.toLocaleString()}\t${row.payee}`);
+      console.log(`  + ${row.date}\t${row.sourceAccount}\t¥${row.amountYen.toLocaleString()}\t${row.payee}`);
     } catch (error) {
       const code = typeof error === "object" && error && "code" in error ? (error as { code?: string }).code : undefined;
       if (code === "P2002") {
