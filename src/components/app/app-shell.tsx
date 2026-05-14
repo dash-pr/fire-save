@@ -28,7 +28,7 @@ import { Card, MetricCard } from "@/components/shared/card";
 import { ProgressBar, StatusPill } from "@/components/shared/progress";
 import { nisaContributions } from "@/data/sample-data";
 import { buildBudgetRows, calculateActivityYen, calculateReadyToAssignYen, calculateSavingsRate, sortBudgetRowsByActivity, suggestedMonthlyForGoal } from "@/domain/budget";
-import { buildCardCycleBreakdown, extractCardSettlements, summarizeCardPayments } from "@/domain/cardPayments";
+import { buildCardCycleBreakdown, extractCardSettlements, getCardCycleWindow, summarizeCardPayments, toLocalIsoDate } from "@/domain/cardPayments";
 import { calculateBunkatsuRemaining, calculateDebtSummary, calculateRiboPayoff, normalizeInterestRate } from "@/domain/debt";
 import {
   calculateAgeFromDob,
@@ -1695,23 +1695,9 @@ function ordinalDay(day: number): string {
   return `${day}${suffix}`;
 }
 
-function getBillingCycle(paymentDueDay: number, today: Date = new Date()): { start: Date; end: Date; due: Date } {
-  // JP credit card model: charges accumulate during a closing month then debit on a fixed day next
-  // month. We approximate the closing window as the 30 days ending ~16 days before the due date.
-  const day = paymentDueDay > 0 ? paymentDueDay : 27;
-  const due = new Date(today.getFullYear(), today.getMonth(), day);
-  if (due.getTime() < today.getTime()) due.setMonth(due.getMonth() + 1);
-  const end = new Date(due);
-  end.setDate(end.getDate() - 16);
-  const start = new Date(end);
-  start.setDate(start.getDate() - 29);
-  return { start, end, due };
-}
-
-/** Local YYYY-MM-DD; toISOString() shifts east-of-UTC dates by a day, dropping cycle boundaries. */
-function localIsoDate(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
+// (Cycle-window math lives in src/domain/cardPayments.ts as getCardCycleWindow + toLocalIsoDate
+// — single source of truth for the Accounts page, the Debt → This Cycle view, and the per-debt
+// Section B card.)
 
 function formatBillingRange(start: Date, end: Date): string {
   const fmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
@@ -1997,14 +1983,18 @@ function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOuts
             const paidPct = debt.type === "installment" && debt.totalInstallments ? Math.min(100, Math.round(((debt.installmentsPaid ?? 0) / debt.totalInstallments) * 100)) : null;
             const isRevolving = debt.type === "revolving";
             const today = new Date();
-            const cycle = isRevolving ? getBillingCycle(debt.paymentDueDay ?? 27, today) : null;
-            const cycleStartIso = cycle ? localIsoDate(cycle.start) : null;
-            const cycleEndIso = cycle ? localIsoDate(cycle.end) : null;
+            // Use the same per-card cycle helper as the Debt → This Cycle and Accounts views so
+            // every surface agrees on the window. Honors cycleStartDay/cycleEndDay on the debt
+            // record (Saison 11→10, SMBC 1→31, etc.) instead of the old dueDay − 16d heuristic.
+            const cycle = isRevolving ? getCardCycleWindow({ debts: [debt], today }) : null;
+            const cycleStartIso = cycle ? toLocalIsoDate(cycle.start) : null;
+            const cycleEndIso = cycle ? toLocalIsoDate(cycle.end) : null;
             const cycleCharges = isRevolving && debt.accountId && cycleStartIso && cycleEndIso
               ? transactions
                   .filter((transaction) => transaction.accountId === debt.accountId)
                   .filter((transaction) => transaction.type === "debit")
                   .filter((transaction) => transaction.source !== "recurring")
+                  .filter((transaction) => !transaction.convertedToRiboAt)
                   .filter((transaction) => transaction.date >= cycleStartIso && transaction.date <= cycleEndIso)
               : [];
             const cycleTotal = cycleCharges.reduce((total, transaction) => total + transaction.amountYen, 0);

@@ -239,11 +239,49 @@ function makeDateClamped(year: number, month: number, day: number): Date {
   return new Date(year, month, Math.min(day, lastDay));
 }
 
-function toLocalIsoDate(date: Date): string {
+export function toLocalIsoDate(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+/**
+ * Compute the next billing cycle for a card given its scheduled debt rows. Honours per-debt
+ * cycleStartDay/cycleEndDay when present; otherwise falls back to a ~26-day window ending a week
+ * before the due date. Local time only — see toLocalIsoDate for why.
+ */
+export function getCardCycleWindow(args: { debts: CreditDebt[]; today?: Date }): { start: Date; end: Date; due: Date } {
+  const today = args.today ?? new Date();
+  const dueDay = (args.debts.find((d) => d.paymentDueDay)?.paymentDueDay) ?? 27;
+  const cycleStartDay = args.debts.find((d) => d.cycleStartDay !== undefined && d.cycleStartDay !== null)?.cycleStartDay;
+  const cycleEndDay = args.debts.find((d) => d.cycleEndDay !== undefined && d.cycleEndDay !== null)?.cycleEndDay;
+
+  const due = new Date(today.getFullYear(), today.getMonth(), dueDay);
+  if (endOfDay(due).getTime() < today.getTime()) due.setMonth(due.getMonth() + 1);
+
+  // Prefer the per-card window (e.g. Saison 11→10, SMBC 1→last day of prev month). The cycle
+  // closes inside the *prior* calendar month relative to the due date. Use makeDateClamped()
+  // instead of letting `new Date(year, month, day)` overflow — overflow turns "April 31" into
+  // May 1 and collapses the whole window to a single day.
+  let start: Date;
+  let end: Date;
+  if (cycleStartDay !== undefined && cycleEndDay !== undefined) {
+    const tentativeEnd = makeDateClamped(due.getFullYear(), due.getMonth(), cycleEndDay);
+    end = tentativeEnd.getTime() >= due.getTime()
+      ? makeDateClamped(due.getFullYear(), due.getMonth() - 1, cycleEndDay)
+      : tentativeEnd;
+    const sameMonthStart = makeDateClamped(end.getFullYear(), end.getMonth(), cycleStartDay);
+    start = sameMonthStart.getTime() <= end.getTime()
+      ? sameMonthStart
+      : makeDateClamped(end.getFullYear(), end.getMonth() - 1, cycleStartDay);
+  } else {
+    end = new Date(due);
+    end.setDate(end.getDate() - 7);
+    start = new Date(end);
+    start.setDate(start.getDate() - 25);
+  }
+  return { start, end, due };
 }
 
 export function buildCardCycleBreakdown(args: {
@@ -254,41 +292,7 @@ export function buildCardCycleBreakdown(args: {
 }): CardCycleBreakdown {
   const today = args.today ?? new Date();
   const cardDebts = args.debts.filter((d) => !d.isPaid && (d.accountId === args.card.id || d.cardName === args.card.name));
-  const dueDay = (cardDebts.find((d) => d.paymentDueDay)?.paymentDueDay) ?? 27;
-  const cycleStartDay = cardDebts.find((d) => d.cycleStartDay !== undefined && d.cycleStartDay !== null)?.cycleStartDay;
-  const cycleEndDay = cardDebts.find((d) => d.cycleEndDay !== undefined && d.cycleEndDay !== null)?.cycleEndDay;
-
-  const due = new Date(today.getFullYear(), today.getMonth(), dueDay);
-  if (endOfDay(due).getTime() < today.getTime()) due.setMonth(due.getMonth() + 1);
-
-  // Prefer the per-card window (e.g. Saison 11→10, SMBC 1→last day of prev month). The cycle
-  // closes inside the *prior* calendar month relative to the due date. Use clampDay() instead of
-  // letting `new Date(year, month, day)` overflow — overflow turns "April 31" into May 1 and
-  // collapses the whole window to a single day.
-  let cycleStart: Date;
-  let cycleEnd: Date;
-  if (cycleStartDay !== undefined && cycleEndDay !== undefined) {
-    // Pick the calendar month for cycleEnd: same month as `due` if the day fits before due,
-    // otherwise the prior calendar month.
-    const tentativeEnd = makeDateClamped(due.getFullYear(), due.getMonth(), cycleEndDay);
-    if (tentativeEnd.getTime() >= due.getTime()) {
-      cycleEnd = makeDateClamped(due.getFullYear(), due.getMonth() - 1, cycleEndDay);
-    } else {
-      cycleEnd = tentativeEnd;
-    }
-    // cycleStartDay normally lives one calendar month before cycleEnd's month. If start > end
-    // within the same month (1→31 as for SMBC/Paidy), start is the same month as cycleEnd.
-    const sameMonthStart = makeDateClamped(cycleEnd.getFullYear(), cycleEnd.getMonth(), cycleStartDay);
-    cycleStart = sameMonthStart.getTime() <= cycleEnd.getTime()
-      ? sameMonthStart
-      : makeDateClamped(cycleEnd.getFullYear(), cycleEnd.getMonth() - 1, cycleStartDay);
-  } else {
-    // Fall back to a ~26-day window ending one week before the due date — covers most JP cards.
-    cycleEnd = new Date(due);
-    cycleEnd.setDate(cycleEnd.getDate() - 7);
-    cycleStart = new Date(cycleEnd);
-    cycleStart.setDate(cycleStart.getDate() - 25);
-  }
+  const { start: cycleStart, end: cycleEnd, due } = getCardCycleWindow({ debts: cardDebts, today });
   const daysUntilDue = Math.max(0, Math.ceil((due.getTime() - today.getTime()) / 86_400_000));
 
   const cycleStartIso = toLocalIsoDate(cycleStart);
