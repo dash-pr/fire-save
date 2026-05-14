@@ -22,6 +22,8 @@ const CSV_PATH = path.resolve(__dirname, "..", "収入・支出詳細_2026.csv")
 const ACCOUNT_NAME_MAP: Record<string, RegExp> = {
   JCB: /JCB/i,
   Saison: /セゾン|saison/i,
+  // The CSV writes Saison rows under "セゾンカード" (Japanese), not "Saison" — handle both.
+  セゾンカード: /セゾン|saison/i,
   楽天カード: /楽天/,
   メルペイ: /メルカリ|メルペイ/,
   PayPay: /PayPay/i,

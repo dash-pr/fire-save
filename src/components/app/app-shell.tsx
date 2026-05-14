@@ -1708,6 +1708,11 @@ function getBillingCycle(paymentDueDay: number, today: Date = new Date()): { sta
   return { start, end, due };
 }
 
+/** Local YYYY-MM-DD; toISOString() shifts east-of-UTC dates by a day, dropping cycle boundaries. */
+function localIsoDate(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 function formatBillingRange(start: Date, end: Date): string {
   const fmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
   return `${fmt.format(start)} – ${fmt.format(end)}`;
@@ -1993,8 +1998,8 @@ function DebtPage({ month, debts, setDebts, totalMonthlyObligationYen, totalOuts
             const isRevolving = debt.type === "revolving";
             const today = new Date();
             const cycle = isRevolving ? getBillingCycle(debt.paymentDueDay ?? 27, today) : null;
-            const cycleStartIso = cycle ? cycle.start.toISOString().slice(0, 10) : null;
-            const cycleEndIso = cycle ? cycle.end.toISOString().slice(0, 10) : null;
+            const cycleStartIso = cycle ? localIsoDate(cycle.start) : null;
+            const cycleEndIso = cycle ? localIsoDate(cycle.end) : null;
             const cycleCharges = isRevolving && debt.accountId && cycleStartIso && cycleEndIso
               ? transactions
                   .filter((transaction) => transaction.accountId === debt.accountId)

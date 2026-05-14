@@ -222,6 +222,30 @@ function endOfDay(date: Date): Date {
   return d;
 }
 
+/**
+ * Format a Date in local time as YYYY-MM-DD. Avoids the off-by-one shift that toISOString()
+ * causes for any timezone east of UTC: a Date constructed via `new Date(2026, 4, 10)` is May 10
+ * 00:00 local, which serializes to "2026-05-09" in UTC. The Transaction.date strings stored in
+ * the DB are local-day strings (no time component), so the cycle window has to compare in local.
+ */
+/**
+ * Construct a local-time Date and clamp the day to the last valid day of the target month so
+ * "Feb 30" doesn't overflow into March 2. `cycleStartDay = 31` on a February cycle becomes
+ * Feb 28/29; on April it becomes April 30. Mirrors how cards actually close their cycles.
+ */
+function makeDateClamped(year: number, month: number, day: number): Date {
+  // new Date(year, month + 1, 0) returns the last day of `month`.
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  return new Date(year, month, Math.min(day, lastDay));
+}
+
+function toLocalIsoDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 export function buildCardCycleBreakdown(args: {
   card: Account;
   debts: CreditDebt[];
@@ -238,18 +262,26 @@ export function buildCardCycleBreakdown(args: {
   if (endOfDay(due).getTime() < today.getTime()) due.setMonth(due.getMonth() + 1);
 
   // Prefer the per-card window (e.g. Saison 11→10, SMBC 1→last day of prev month). The cycle
-  // closes inside the *prior* calendar month relative to the due date.
+  // closes inside the *prior* calendar month relative to the due date. Use clampDay() instead of
+  // letting `new Date(year, month, day)` overflow — overflow turns "April 31" into May 1 and
+  // collapses the whole window to a single day.
   let cycleStart: Date;
   let cycleEnd: Date;
   if (cycleStartDay !== undefined && cycleEndDay !== undefined) {
-    // The cycle ends in the month *before* the due date (when the due day is early-month, like
-    // Saison's 4th, the cycle closes in the prior calendar month). Walk back from the due date.
-    cycleEnd = new Date(due.getFullYear(), due.getMonth(), cycleEndDay);
-    if (cycleEnd.getTime() >= due.getTime()) cycleEnd.setMonth(cycleEnd.getMonth() - 1);
-    // cycleStartDay typically lives one calendar month before cycleEnd. If start > end (e.g.
-    // SMBC 1→31), the start is the same calendar month as cycleEnd. Otherwise it's one month back.
-    cycleStart = new Date(cycleEnd.getFullYear(), cycleEnd.getMonth(), cycleStartDay);
-    if (cycleStart.getTime() > cycleEnd.getTime()) cycleStart.setMonth(cycleStart.getMonth() - 1);
+    // Pick the calendar month for cycleEnd: same month as `due` if the day fits before due,
+    // otherwise the prior calendar month.
+    const tentativeEnd = makeDateClamped(due.getFullYear(), due.getMonth(), cycleEndDay);
+    if (tentativeEnd.getTime() >= due.getTime()) {
+      cycleEnd = makeDateClamped(due.getFullYear(), due.getMonth() - 1, cycleEndDay);
+    } else {
+      cycleEnd = tentativeEnd;
+    }
+    // cycleStartDay normally lives one calendar month before cycleEnd's month. If start > end
+    // within the same month (1→31 as for SMBC/Paidy), start is the same month as cycleEnd.
+    const sameMonthStart = makeDateClamped(cycleEnd.getFullYear(), cycleEnd.getMonth(), cycleStartDay);
+    cycleStart = sameMonthStart.getTime() <= cycleEnd.getTime()
+      ? sameMonthStart
+      : makeDateClamped(cycleEnd.getFullYear(), cycleEnd.getMonth() - 1, cycleStartDay);
   } else {
     // Fall back to a ~26-day window ending one week before the due date — covers most JP cards.
     cycleEnd = new Date(due);
@@ -259,8 +291,8 @@ export function buildCardCycleBreakdown(args: {
   }
   const daysUntilDue = Math.max(0, Math.ceil((due.getTime() - today.getTime()) / 86_400_000));
 
-  const cycleStartIso = cycleStart.toISOString().slice(0, 10);
-  const cycleEndIso = cycleEnd.toISOString().slice(0, 10);
+  const cycleStartIso = toLocalIsoDate(cycleStart);
+  const cycleEndIso = toLocalIsoDate(cycleEnd);
   // Charges that have been "converted to ribo" no longer count toward this cycle — their amount
   // moved into the card's revolving balance, which is reflected via riboPrincipal.
   const cycleCharges = args.transactions
@@ -291,7 +323,7 @@ export function buildCardCycleBreakdown(args: {
     card: args.card,
     cycleStart: cycleStartIso,
     cycleEnd: cycleEndIso,
-    dueDate: due.toISOString().slice(0, 10),
+    dueDate: toLocalIsoDate(due),
     daysUntilDue,
     newChargesYen,
     newCharges: cycleCharges
